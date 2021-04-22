@@ -167,12 +167,8 @@ class GroupFree3DHead(nn.Module):
 
         # Initial object candidate sampling
         self.gsample_module = GeneralSamplingModule()
-        if self.sampling == 'fps':
-            self.fps_module = Points_Sampler(num_proposal)
-        elif self.sampling == 'kps':
-            self.points_obj_cls = PointsObjClsModule(self.d_model)
-        else:
-            raise NotImplementedError
+        self.fps_module = Points_Sampler([self.num_proposal])
+        self.points_obj_cls = PointsObjClsModule(self.d_model)
 
         # self.vote_module = VoteModule(**vote_module_cfg)
         # self.vote_aggregation = build_sa_module(vote_aggregation_cfg)
@@ -348,8 +344,10 @@ class GroupFree3DHead(nn.Module):
         base_size = bbox3d[:, :, 3:6].detach().clone()
 
         # Transformer Decoder and Prediction
-        query = self.decoder_query_proj(cluster_feature)
-        key = self.decoder_key_proj(points_features)
+        print('cluster_feature.shape: ', cluster_feature.shape)
+        # (B, C, N)->(N, B, C)
+        query = self.decoder_query_proj(cluster_feature).permute(2, 0, 1)
+        key = self.decoder_key_proj(points_features).permute(2, 0, 1)
 
         # Position Embedding for Cross-Attention
         if self.cross_pos_embed == 'none':
@@ -375,16 +373,19 @@ class GroupFree3DHead(nn.Module):
                     f'self_position_embedding not supported \
                         {self.self_pos_embed}')
 
+            # (B, N, 6)->(B, C, N)->(N, B, C)
             query_pos_embed = self.decoder_self_posembeds[i](
                 query_pos).permute(2, 0, 1)
             key_pos_embed = self.decoder_cross_posembeds[i](key_pos).permute(
                 2, 0, 1)
 
             # Transformer Decoder Layer
-            query = self.decoder[i](query, key, query_pos_embed, key_pos_embed)
+            query = self.decoder[i](query, key, key_pos_embed,
+                                    query_pos_embed).permute(1, 2, 0)
 
             # Prediction
             cls_predictions, reg_predictions = self.prediction_heads[i](query)
+            query = query.permute(2, 0, 1)
 
             decode_res = self.bbox_coder.split_pred(cls_predictions,
                                                     reg_predictions,
