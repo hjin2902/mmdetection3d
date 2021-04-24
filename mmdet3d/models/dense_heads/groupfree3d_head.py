@@ -332,10 +332,16 @@ class GroupFree3DHead(nn.Module):
         results['query_points_feature'] = features  # (B, C, M)
         results['query_points_sample_inds'] = sample_inds  # (B, M)
 
+        # print(cluster_feature)
+        # print(cluster_feature.shape)
         cls_predictions, reg_predictions = self.conv_pred(cluster_feature)
         decode_res = self.bbox_coder.split_pred(cls_predictions,
                                                 reg_predictions, cluster_xyz)
-
+        # print(shared)
+        # print(shared.shape)
+        # print(reg_predictions.transpose(2,1)[...,0:3])
+        # print(decode_res['size_res_norm'])
+        # print(decode_res['size_res_norm'].shape)
         results.update(decode_res)
         bbox3d = self.bbox_coder.decode(results)
 
@@ -344,7 +350,6 @@ class GroupFree3DHead(nn.Module):
         base_size = bbox3d[:, :, 3:6].detach().clone()
 
         # Transformer Decoder and Prediction
-        print('cluster_feature.shape: ', cluster_feature.shape)
         # (B, C, N)->(N, B, C)
         query = self.decoder_query_proj(cluster_feature).permute(2, 0, 1)
         key = self.decoder_key_proj(points_features).permute(2, 0, 1)
