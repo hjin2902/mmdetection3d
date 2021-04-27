@@ -84,7 +84,7 @@ class PositionEmbeddingLearned(nn.Module):
 
 
 @HEADS.register_module()
-class GroupFree3DHead(nn.Module):
+class GroupFree3DHead_0(nn.Module):
     r"""Bbox head of `Group-Free 3D https://arxiv.org/abs/2104.00678>`_.
 
     Args:
@@ -129,7 +129,7 @@ class GroupFree3DHead(nn.Module):
             size_res_loss=None,
             semantic_loss=None,
             iou_loss=None):
-        super(GroupFree3DHead, self).__init__()
+        super(GroupFree3DHead_0, self).__init__()
         self.num_classes = num_classes
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg

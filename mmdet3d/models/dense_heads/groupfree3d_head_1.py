@@ -1,8 +1,6 @@
-import copy
 import numpy as np
 import torch
-from mmcv import ConfigDict
-from mmcv.cnn.bricks.transformer import build_transformer_layer
+from mmcv.cnn.bricks.transformer import build_transformer_layer_sequence
 from mmcv.runner import force_fp32
 from torch import nn as nn
 from torch.nn import functional as F
@@ -69,24 +67,8 @@ class GeneralSamplingModule(nn.Module):
         return new_xyz, new_features, sample_inds
 
 
-class PositionEmbeddingLearned(nn.Module):
-    """Absolute pos embedding, learned."""
-
-    def __init__(self, input_channel, num_pos_feats=288):
-        super().__init__()
-        self.position_embedding_head = nn.Sequential(
-            nn.Conv1d(input_channel, num_pos_feats, kernel_size=1),
-            nn.BatchNorm1d(num_pos_feats), nn.ReLU(inplace=True),
-            nn.Conv1d(num_pos_feats, num_pos_feats, kernel_size=1))
-
-    def forward(self, xyz):
-        xyz = xyz.transpose(1, 2).contiguous()
-        position_embedding = self.position_embedding_head(xyz)
-        return position_embedding
-
-
 @HEADS.register_module()
-class GroupFree3DHead(nn.Module):
+class GroupFree3DHead_a(nn.Module):
     r"""Bbox head of `Group-Free 3D https://arxiv.org/abs/2104.00678>`_.
 
     Args:
@@ -110,90 +92,34 @@ class GroupFree3DHead(nn.Module):
         semantic_loss (dict): Config of point-wise semantic segmentation loss.
     """
 
-    def __init__(self,
-                 num_classes,
-                 in_channels,
-                 bbox_coder,
-                 num_decoder_layers,
-                 transformerlayers,
-                 train_cfg=None,
-                 test_cfg=None,
-                 num_proposal=128,
-                 pred_layer_cfg=None,
-                 objectness_loss=None,
-                 center_loss=None,
-                 dir_class_loss=None,
-                 dir_res_loss=None,
-                 size_class_loss=None,
-                 size_res_loss=None,
-                 semantic_loss=None,
-                 iou_loss=None):
-        super(GroupFree3DHead, self).__init__()
+    def __init__(
+            self,
+            num_classes,
+            in_channels,
+            bbox_coder,
+            transformer_decoder_cfg,
+            train_cfg=None,
+            test_cfg=None,
+            #  vote_module_cfg=None,
+            #  vote_aggregation_cfg=None,
+            num_proposal=128,
+            pred_layer_cfg=None,
+            objectness_loss=None,
+            center_loss=None,
+            dir_class_loss=None,
+            dir_res_loss=None,
+            size_class_loss=None,
+            size_res_loss=None,
+            semantic_loss=None,
+            iou_loss=None):
+        super(GroupFree3DHead_a, self).__init__()
         self.num_classes = num_classes
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
+        # self.gt_per_seed = vote_module_cfg['gt_per_seed']
+        # self.num_proposal = vote_aggregation_cfg['num_point']
         self.num_proposal = num_proposal
         self.in_channels = in_channels
-        self.num_decoder_layers = num_decoder_layers
-
-        # Transformer decoder layers
-        if isinstance(transformerlayers, ConfigDict):
-            transformerlayers = [
-                copy.deepcopy(transformerlayers)
-                for _ in range(num_decoder_layers)
-            ]
-        else:
-            assert isinstance(transformerlayers, list) and \
-                   len(transformerlayers) == num_decoder_layers
-        self.decoder_layers = nn.ModuleList()
-        for i in range(self.num_decoder_layers):
-            self.decoder_layers.append(
-                build_transformer_layer(transformerlayers[i]))
-        self.embed_dims = self.decoder_layers[0].embed_dims
-
-        # bbox_coder
-        self.bbox_coder = build_bbox_coder(bbox_coder)
-        self.num_sizes = self.bbox_coder.num_sizes
-        self.num_dir_bins = self.bbox_coder.num_dir_bins
-
-        # Initial object candidate sampling
-        self.gsample_module = GeneralSamplingModule()
-        self.fps_module = Points_Sampler([self.num_proposal])
-        self.points_obj_cls = PointsObjClsModule(self.in_channels)
-
-        self.fp16_enabled = False
-
-        # initial candidate prediction
-        self.conv_pred = BaseConvBboxHead(
-            **pred_layer_cfg,
-            num_cls_out_channels=self._get_cls_out_channels(),
-            num_reg_out_channels=self._get_reg_out_channels())
-
-        # query proj and key proj
-        self.decoder_query_proj = nn.Conv1d(
-            self.embed_dims, self.embed_dims, kernel_size=1)
-        self.decoder_key_proj = nn.Conv1d(
-            self.embed_dims, self.embed_dims, kernel_size=1)
-
-        # query position embed
-        self.decoder_self_posembeds = nn.ModuleList()
-        for _ in range(self.num_decoder_layers):
-            self.decoder_self_posembeds.append(
-                PositionEmbeddingLearned(6, self.embed_dims))
-        # key position embed
-        self.decoder_cross_posembeds = nn.ModuleList()
-        for _ in range(self.num_decoder_layers):
-            self.decoder_cross_posembeds.append(
-                PositionEmbeddingLearned(3, self.embed_dims))
-
-        # Prediction Head
-        self.prediction_heads = nn.ModuleList()
-        for i in range(self.num_decoder_layers):
-            self.prediction_heads.append(
-                BaseConvBboxHead(
-                    **pred_layer_cfg,
-                    num_cls_out_channels=self._get_cls_out_channels(),
-                    num_reg_out_channels=self._get_reg_out_channels()))
 
         self.objectness_loss = build_loss(objectness_loss)
         self.center_loss = build_loss(center_loss)
@@ -208,6 +134,29 @@ class GroupFree3DHead(nn.Module):
             self.iou_loss = build_loss(iou_loss)
         else:
             self.iou_loss = None
+
+        self.bbox_coder = build_bbox_coder(bbox_coder)
+        self.num_sizes = self.bbox_coder.num_sizes
+        self.num_dir_bins = self.bbox_coder.num_dir_bins
+
+        # Initial object candidate sampling
+        self.gsample_module = GeneralSamplingModule()
+        self.fps_module = Points_Sampler([self.num_proposal])
+        self.points_obj_cls = PointsObjClsModule(self.in_channels)
+
+        # self.vote_module = VoteModule(**vote_module_cfg)
+        # self.vote_aggregation = build_sa_module(vote_aggregation_cfg)
+        self.fp16_enabled = False
+
+        # Bbox classification and regression
+        self.conv_pred = BaseConvBboxHead(
+            **pred_layer_cfg,
+            num_cls_out_channels=self._get_cls_out_channels(),
+            num_reg_out_channels=self._get_reg_out_channels())
+
+        # Transformer Decoder
+        self.transformer_decoder = build_transformer_layer_sequence(
+            transformer_decoder_cfg)
 
     def init_weights(self):
         """Initialize weights of transformer decoder in GroupFree3DHead."""
@@ -260,16 +209,21 @@ class GroupFree3DHead(nn.Module):
         """
         assert sample_mod in ['fps', 'kps']
 
-        seed_xyz, seed_features, seed_indices = self._extract_input(feat_dict)
+        seed_points, seed_features, seed_indices = self._extract_input(
+            feat_dict)
 
         results = dict(
-            seed_points=seed_xyz,
+            seed_points=seed_points,
             seed_features=seed_features,
             seed_indices=seed_indices)
 
+        # for key and key_pos in Transformer Decoder
+        points_xyz = feat_dict['fp_xyz'][-1]
+        points_features = feat_dict['fp_features'][-1]
+
         # 1. Initial object candidates sampling.
         if sample_mod == 'fps':
-            sample_inds = self.fps_module(seed_xyz, seed_features)
+            sample_inds = self.fps_module(seed_points, seed_features)
         elif sample_mod == 'kps':
             points_obj_cls_logits = self.points_obj_cls(
                 seed_features)  # (batch_size, 1, num_seed)
@@ -282,17 +236,19 @@ class GroupFree3DHead(nn.Module):
             raise NotImplementedError(
                 f'Sample mode {sample_mod} is not supported!')
 
-        candidate_xyz, candidate_features, sample_inds = self.gsample_module(
-            seed_xyz, seed_features, sample_inds)
+        xyz, features, sample_inds = self.gsample_module(
+            seed_points, seed_features, sample_inds)
 
-        results['query_points_xyz'] = candidate_xyz  # (B, M, 3)
-        results['query_points_feature'] = candidate_features  # (B, C, M)
+        cluster_feature = features
+        cluster_xyz = xyz
+        results['query_points_xyz'] = xyz  # (B, M, 3)
+        results['query_points_feature'] = features  # (B, C, M)
         results['query_points_sample_inds'] = sample_inds  # (B, M)
 
         suffix = '_proposal'
-        cls_predictions, reg_predictions = self.conv_pred(candidate_features)
+        cls_predictions, reg_predictions = self.conv_pred(cluster_feature)
         decode_res = self.bbox_coder.split_pred(cls_predictions,
-                                                reg_predictions, candidate_xyz,
+                                                reg_predictions, cluster_xyz,
                                                 suffix)
 
         results.update(decode_res)
@@ -301,36 +257,12 @@ class GroupFree3DHead(nn.Module):
         # 2. Iterative object box prediction by transformer decoder.
         base_bbox3d = bbox3d[:, :, :6].detach().clone()
 
-        query = self.decoder_query_proj(candidate_features).permute(2, 0, 1)
-        key = self.decoder_key_proj(seed_features).permute(2, 0, 1)
-        value = key
+        transformer_res = self.transformer_decoder(cluster_feature,
+                                                   cluster_xyz,
+                                                   points_features, points_xyz,
+                                                   base_bbox3d)
 
-        # transformer decoder
-        for i in range(self.num_decoder_layers):
-            suffix = f'_{i}'
-
-            query_pos = self.decoder_self_posembeds[i](base_bbox3d).permute(
-                2, 0, 1)
-            key_pos = self.decoder_cross_posembeds[i](seed_xyz).permute(
-                2, 0, 1)
-
-            query = self.decoder_layers[i](
-                query, key, value, query_pos=query_pos,
-                key_pos=key_pos).permute(1, 2, 0)
-
-            results['query' + suffix] = query
-
-            cls_predictions, reg_predictions = self.prediction_heads[i](query)
-            decode_res = self.bbox_coder.split_pred(cls_predictions,
-                                                    reg_predictions,
-                                                    candidate_xyz, suffix)
-            # TODO: should save bbox3d instead of decode_res?
-            results.update(decode_res)
-
-            bbox3d = self.bbox_coder.decode(results, suffix)
-            results['bbox3d' + suffix] = bbox3d
-            base_bbox3d = bbox3d[:, :, :6].detach().clone()
-            query = query.permute(2, 0, 1)
+        results.update(transformer_res)
 
         return results
 

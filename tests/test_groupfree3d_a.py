@@ -95,25 +95,31 @@ def load_checkpoint(checkpoint_path, model):
             state_dict[key] = state_dict[k]
 
         elif 'decoder_key_proj' in k:
-            state_dict[k[len('module.'):]] = state_dict[k]
+            state_dict['transformer_decoder.' +
+                       k[len('module.'):]] = state_dict[k]
 
         elif 'decoder_query_proj' in k:
-            state_dict[k[len('module.'):]] = state_dict[k]
+            state_dict['transformer_decoder.' +
+                       k[len('module.'):]] = state_dict[k]
 
         elif 'decoder_self_posembeds' in k:
-            state_dict[k[len('module.'):]] = state_dict[k]
+            state_dict['transformer_decoder.' +
+                       k[len('module.'):]] = state_dict[k]
 
         elif 'decoder_cross_posembeds' in k:
-            state_dict[k[len('module.'):]] = state_dict[k]
+            state_dict['transformer_decoder.' +
+                       k[len('module.'):]] = state_dict[k]
 
         elif 'self_attn' in k:
             a, b = k.split('.self_attn')
-            key = 'decoder_layers.' + a[-1] + '.attentions.0.attn' + b
+            key = 'transformer_decoder.layers.' + a[
+                -1] + '.attentions.0.attn' + b
             state_dict[key] = state_dict[k]
 
         elif 'multihead_attn' in k:
             a, b = k.split('.multihead_attn')
-            key = 'decoder_layers.' + a[-1] + '.attentions.1.attn' + b
+            key = 'transformer_decoder.layers.' + a[
+                -1] + '.attentions.1.attn' + b
             state_dict[key] = state_dict[k]
 
         elif 'linear' in k:
@@ -122,13 +128,14 @@ def load_checkpoint(checkpoint_path, model):
                 c = '0.0'
             else:
                 c = '1'
-            key = 'decoder_layers.' + a[-1] + '.ffns.0.layers.' + c + b[1:]
+            key = 'transformer_decoder.layers.' + a[
+                -1] + '.ffns.0.layers.' + c + b[1:]
             state_dict[key] = state_dict[k]
 
         elif 'norm' in k:
             a, b = k.split('.norm')
             c = str(int(b[0]) - 1)
-            key = 'decoder_layers.' + a[-1] + '.norms.' + c + b[1:]
+            key = 'transformer_decoder.layers.' + a[-1] + '.norms.' + c + b[1:]
             state_dict[key] = state_dict[k]
 
         elif 'prediction_heads' in k:
@@ -137,12 +144,14 @@ def load_checkpoint(checkpoint_path, model):
             c = a[2:]
             if '1' in c:
                 d, e = c.split('1')
-                key = 'prediction_heads.' + b + 'shared_convs.layer0.' + d + e
+                key = 'transformer_decoder.prediction_heads.' + b + \
+                    'shared_convs.layer0.' + d + e
             elif '2' in c:
                 d, e = c.split('2')
-                key = 'prediction_heads.' + b + 'shared_convs.layer1.' + d + e
+                key = 'transformer_decoder.prediction_heads.' + b + \
+                    'shared_convs.layer1.' + d + e
             else:
-                key = 'prediction_heads.' + a
+                key = 'transformer_decoder.prediction_heads.' + a
 
             state_dict[key] = state_dict[k]
 
@@ -193,7 +202,7 @@ def load_checkpoint(checkpoint_path, model):
     del state_dict['conv_pred.size_residual_head.bias']
 
     for i in range(6):
-        prefix = 'prediction_heads.' + str(i) + '.'
+        prefix = 'transformer_decoder.prediction_heads.' + str(i) + '.'
 
         obj_weight = state_dict[prefix + 'objectness_scores_head.weight']
         cls_weight = state_dict[prefix + 'sem_cls_scores_head.weight']
@@ -255,16 +264,14 @@ def test_vote_head():
         'groupfree3d/groupfree3d_8x8_scannet-3d-18class.py')
     self = build_head(vote_head_cfg)
 
-    load_checkpoint('tests/scannet_l6o256.pth', self)
+    # load_checkpoint('tests/scannet_l6o256.pth', self)
 
     self.cuda()
 
     self.eval()
 
-    # x = torch.randn([2, 3])
-    # print(x)
-    # for param_tensor in self.state_dict():
-    #     print(param_tensor)
+    for param_tensor in self.state_dict():
+        print(param_tensor)
     #     print(param_tensor,'\t',self.state_dict()[param_tensor].size())
 
     # fp_xyz = [torch.rand([2, 256, 3], dtype=torch.float32).cuda()]
@@ -337,8 +344,8 @@ def test_vote_head():
     # print(ret_dict['dir_res_norm_proposal'].shape)
     # print(ret_dict['dir_res_5'])
     # print(ret_dict['dir_res_5'].shape)
-    print(ret_dict['size_class_5'])
-    print(ret_dict['size_class_5'].shape)
+    # print(ret_dict['size_class_5'])
+    # print(ret_dict['size_class_5'].shape)
     # print(ret_dict['size_res_norm_proposal'])
     # print(ret_dict['size_res_norm_proposal'].shape)
     # print(ret_dict['size_res_5'])
