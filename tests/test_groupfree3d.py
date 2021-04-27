@@ -296,7 +296,7 @@ def test_vote_head():
     ret_dict = self(input_dict, 'kps')
 
     # print(ret_dict['obj_scores_proposal'].shape)
-    print(ret_dict['size_res'].shape)
+    print(ret_dict['size_res_0'].shape)
     # print(ret_dict['dir_res'].shape)
 
     # for k, v in ret_dict.items():
@@ -336,7 +336,7 @@ def test_vote_head():
 
     # print(ret_dict['center_residual_0'])
     # print(ret_dict['center_residual_0'].shape)
-    # print(ret_dict['center_5'])
+    print(ret_dict['center_5'])
     # print(ret_dict['center_5'].shape)
     # print(ret_dict['dir_class_5'])
     # print(ret_dict['dir_class_5'].shape)
