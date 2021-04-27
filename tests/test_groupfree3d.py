@@ -62,17 +62,217 @@ def _get_vote_head_cfg(fname):
     return vote_head
 
 
+def load_checkpoint(checkpoint_path, model):
+    # Load checkpoint if there is any
+
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    state_dict = checkpoint['model']
+
+    for k in list(state_dict.keys()):
+        # print(k, '\t', state_dict[k].shape)
+        # state_dict[k[len("module."):]] = state_dict[k]
+        # delete renamed or unused k
+        # del state_dict[k]
+
+        if 'backbone_net' in k:
+            del state_dict[k]
+            continue
+
+        if 'points_obj_cls' in k:
+            state_dict[k[len('module.'):]] = state_dict[k]
+
+        elif 'proposal_head' in k:
+            if '1' in k:
+                a = '0.'
+                b, c = k[len('module.proposal_head.'):].split('1')
+                key = 'conv_pred.shared_convs.layer' + a + b + c
+            elif '2' in k:
+                a = '1.'
+                b, c = k[len('module.proposal_head.'):].split('2')
+                key = 'conv_pred.shared_convs.layer' + a + b + c
+            else:
+                key = 'conv_pred.' + k[len('module.proposal_head.'):]
+            state_dict[key] = state_dict[k]
+
+        elif 'decoder_key_proj' in k:
+            state_dict['transformer_decoder.' +
+                       k[len('module.'):]] = state_dict[k]
+
+        elif 'decoder_query_proj' in k:
+            state_dict['transformer_decoder.' +
+                       k[len('module.'):]] = state_dict[k]
+
+        elif 'decoder_self_posembeds' in k:
+            state_dict['transformer_decoder.' +
+                       k[len('module.'):]] = state_dict[k]
+
+        elif 'decoder_cross_posembeds' in k:
+            state_dict['transformer_decoder.' +
+                       k[len('module.'):]] = state_dict[k]
+
+        elif 'self_attn' in k:
+            a, b = k.split('.self_attn')
+            key = 'transformer_decoder.layers.' + a[
+                -1] + '.attentions.0.attn' + b
+            state_dict[key] = state_dict[k]
+
+        elif 'multihead_attn' in k:
+            a, b = k.split('.multihead_attn')
+            key = 'transformer_decoder.layers.' + a[
+                -1] + '.attentions.1.attn' + b
+            state_dict[key] = state_dict[k]
+
+        elif 'linear' in k:
+            a, b = k.split('.linear')
+            if b[0] == '1':
+                c = '0.0'
+            else:
+                c = '1'
+            key = 'transformer_decoder.layers.' + a[
+                -1] + '.ffns.0.layers.' + c + b[1:]
+            state_dict[key] = state_dict[k]
+
+        elif 'norm' in k:
+            a, b = k.split('.norm')
+            c = str(int(b[0]) - 1)
+            key = 'transformer_decoder.layers.' + a[-1] + '.norms.' + c + b[1:]
+            state_dict[key] = state_dict[k]
+
+        elif 'prediction_heads' in k:
+            a = k[len('module.prediction_heads.'):]
+            b = a[0:2]
+            c = a[2:]
+            if '1' in c:
+                d, e = c.split('1')
+                key = 'transformer_decoder.prediction_heads.' + b + \
+                    'shared_convs.layer0.' + d + e
+            elif '2' in c:
+                d, e = c.split('2')
+                key = 'transformer_decoder.prediction_heads.' + b + \
+                    'shared_convs.layer1.' + d + e
+            else:
+                key = 'transformer_decoder.prediction_heads.' + a
+
+            state_dict[key] = state_dict[k]
+
+        del state_dict[k]
+
+    obj_weight = state_dict['conv_pred.objectness_scores_head.weight']
+    cls_weight = state_dict['conv_pred.sem_cls_scores_head.weight']
+    state_dict['conv_pred.conv_cls.weight'] = torch.cat(
+        [obj_weight, cls_weight])
+    del state_dict['conv_pred.objectness_scores_head.weight']
+    del state_dict['conv_pred.sem_cls_scores_head.weight']
+
+    obj_bias = state_dict['conv_pred.objectness_scores_head.bias']
+    cls_bias = state_dict['conv_pred.sem_cls_scores_head.bias']
+    state_dict['conv_pred.conv_cls.bias'] = torch.cat([obj_bias, cls_bias])
+    del state_dict['conv_pred.objectness_scores_head.bias']
+    del state_dict['conv_pred.sem_cls_scores_head.bias']
+
+    center_weight = state_dict['conv_pred.center_residual_head.weight']
+    dir_cls_weight = state_dict['conv_pred.heading_class_head.weight']
+    dir_res_weight = state_dict['conv_pred.heading_residual_head.weight']
+    size_cls_weight = state_dict['conv_pred.size_class_head.weight']
+    size_res_weight = state_dict['conv_pred.size_residual_head.weight']
+
+    state_dict['conv_pred.conv_reg.weight'] = torch.cat([
+        center_weight, dir_cls_weight, dir_res_weight, size_cls_weight,
+        size_res_weight
+    ])
+    del state_dict['conv_pred.center_residual_head.weight']
+    del state_dict['conv_pred.heading_class_head.weight']
+    del state_dict['conv_pred.heading_residual_head.weight']
+    del state_dict['conv_pred.size_class_head.weight']
+    del state_dict['conv_pred.size_residual_head.weight']
+
+    center_bias = state_dict['conv_pred.center_residual_head.bias']
+    dir_cls_bias = state_dict['conv_pred.heading_class_head.bias']
+    dir_res_bias = state_dict['conv_pred.heading_residual_head.bias']
+    size_cls_bias = state_dict['conv_pred.size_class_head.bias']
+    size_res_bias = state_dict['conv_pred.size_residual_head.bias']
+
+    state_dict['conv_pred.conv_reg.bias'] = torch.cat([
+        center_bias, dir_cls_bias, dir_res_bias, size_cls_bias, size_res_bias
+    ])
+    del state_dict['conv_pred.center_residual_head.bias']
+    del state_dict['conv_pred.heading_class_head.bias']
+    del state_dict['conv_pred.heading_residual_head.bias']
+    del state_dict['conv_pred.size_class_head.bias']
+    del state_dict['conv_pred.size_residual_head.bias']
+
+    for i in range(6):
+        prefix = 'transformer_decoder.prediction_heads.' + str(i) + '.'
+
+        obj_weight = state_dict[prefix + 'objectness_scores_head.weight']
+        cls_weight = state_dict[prefix + 'sem_cls_scores_head.weight']
+        state_dict[prefix + 'conv_cls.weight'] = torch.cat(
+            [obj_weight, cls_weight])
+        del state_dict[prefix + 'objectness_scores_head.weight']
+        del state_dict[prefix + 'sem_cls_scores_head.weight']
+
+        obj_bias = state_dict[prefix + 'objectness_scores_head.bias']
+        cls_bias = state_dict[prefix + 'sem_cls_scores_head.bias']
+        state_dict[prefix + 'conv_cls.bias'] = torch.cat([obj_bias, cls_bias])
+        del state_dict[prefix + 'objectness_scores_head.bias']
+        del state_dict[prefix + 'sem_cls_scores_head.bias']
+
+        center_weight = state_dict[prefix + 'center_residual_head.weight']
+        dir_cls_weight = state_dict[prefix + 'heading_class_head.weight']
+        dir_res_weight = state_dict[prefix + 'heading_residual_head.weight']
+        size_cls_weight = state_dict[prefix + 'size_class_head.weight']
+        size_res_weight = state_dict[prefix + 'size_residual_head.weight']
+        state_dict[prefix + 'conv_reg.weight'] = torch.cat([
+            center_weight, dir_cls_weight, dir_res_weight, size_cls_weight,
+            size_res_weight
+        ])
+        del state_dict[prefix + 'center_residual_head.weight']
+        del state_dict[prefix + 'heading_class_head.weight']
+        del state_dict[prefix + 'heading_residual_head.weight']
+        del state_dict[prefix + 'size_class_head.weight']
+        del state_dict[prefix + 'size_residual_head.weight']
+
+        center_bias = state_dict[prefix + 'center_residual_head.bias']
+        dir_cls_bias = state_dict[prefix + 'heading_class_head.bias']
+        dir_res_bias = state_dict[prefix + 'heading_residual_head.bias']
+        size_cls_bias = state_dict[prefix + 'size_class_head.bias']
+        size_res_bias = state_dict[prefix + 'size_residual_head.bias']
+        state_dict[prefix + 'conv_reg.bias'] = torch.cat([
+            center_bias, dir_cls_bias, dir_res_bias, size_cls_bias,
+            size_res_bias
+        ])
+        del state_dict[prefix + 'center_residual_head.bias']
+        del state_dict[prefix + 'heading_class_head.bias']
+        del state_dict[prefix + 'heading_residual_head.bias']
+        del state_dict[prefix + 'size_class_head.bias']
+        del state_dict[prefix + 'size_residual_head.bias']
+
+    model.load_state_dict(state_dict)
+    # print(state_dict)
+
+    print(f'{checkpoint_path} loaded successfully!!!')
+
+    del checkpoint
+    torch.cuda.empty_cache()
+
+
 def test_vote_head():
     if not torch.cuda.is_available():
         pytest.skip('test requires GPU and torch+cuda')
     _setup_seed(0)
     vote_head_cfg = _get_vote_head_cfg(
         'groupfree3d/groupfree3d_8x8_scannet-3d-18class.py')
-    self = build_head(vote_head_cfg).cuda()
+    self = build_head(vote_head_cfg)
 
-    for param_tensor in self.state_dict():
-        print(param_tensor)
-        # print(param_tensor,'\t',self.state_dict()[param_tensor].size())
+    load_checkpoint('tests/scannet_l6o256.pth', self)
+
+    self.cuda()
+
+    self.eval()
+
+    # for param_tensor in self.state_dict():
+    #     # print(param_tensor)
+    #     print(param_tensor,'\t',self.state_dict()[param_tensor].size())
 
     # fp_xyz = [torch.rand([2, 256, 3], dtype=torch.float32).cuda()]
     # fp_features = [torch.rand([2, 288, 256], dtype=torch.float32).cuda()]
@@ -94,17 +294,67 @@ def test_vote_head():
 
     # test forward
     ret_dict = self(input_dict, 'kps')
-    # print(ret_dict['center'])
 
-    print(ret_dict['center'].shape)
-    print(ret_dict['obj_scores'].shape)
+    # print(ret_dict['obj_scores_proposal'].shape)
     print(ret_dict['size_res'].shape)
-    print(ret_dict['dir_res'].shape)
+    # print(ret_dict['dir_res'].shape)
 
     # for k, v in ret_dict.items():
-    #     print(k, v.shape)
+    #     # print(k, v.shape)
+    #     print(k)
 
-    # print(ret_dict['center'])
+    # print(ret_dict['seeds_obj_cls_logits'])
+    # print(ret_dict['seeds_obj_cls_logits'].shape)
+
+    # print(ret_dict['center_residual_proposal'])
+    # print(ret_dict['center_residual_proposal'].shape)
+    # print(ret_dict['center_proposal'])
+    # print(ret_dict['center_proposal'].shape)
+    # print(ret_dict['dir_class_proposal'])
+    # print(ret_dict['dir_class_proposal'].shape)
+    # print(ret_dict['dir_res_norm_proposal'])
+    # print(ret_dict['dir_res_norm_proposal'].shape)
+    # print(ret_dict['dir_res_proposal'])
+    # print(ret_dict['dir_res_proposal'].shape)
+    # print(ret_dict['size_class_proposal'])
+    # print(ret_dict['size_class_proposal'].shape)
+    # print(ret_dict['size_res_norm_proposal'])
+    # print(ret_dict['size_res_norm_proposal'].shape)
+    # print(ret_dict['size_res_proposal'])
+    # print(ret_dict['size_res_proposal'].shape)
+
+    # print(ret_dict['obj_scores_proposal'])
+    # print(ret_dict['obj_scores_proposal'].shape)
+    # print(ret_dict['sem_scores_proposal'])
+    # print(ret_dict['sem_scores_proposal'].shape)
+
+    # print(ret_dict['query_proj'])
+    # print(ret_dict['query_proj'].shape)
+
+    # print(ret_dict['query_5'])
+    # print(ret_dict['query_5'].shape)
+
+    # print(ret_dict['center_residual_0'])
+    # print(ret_dict['center_residual_0'].shape)
+    # print(ret_dict['center_5'])
+    # print(ret_dict['center_5'].shape)
+    # print(ret_dict['dir_class_5'])
+    # print(ret_dict['dir_class_5'].shape)
+    # print(ret_dict['dir_res_norm_proposal'])
+    # print(ret_dict['dir_res_norm_proposal'].shape)
+    # print(ret_dict['dir_res_5'])
+    # print(ret_dict['dir_res_5'].shape)
+    # print(ret_dict['size_class_5'])
+    # print(ret_dict['size_class_5'].shape)
+    # print(ret_dict['size_res_norm_proposal'])
+    # print(ret_dict['size_res_norm_proposal'].shape)
+    # print(ret_dict['size_res_5'])
+    # print(ret_dict['size_res_5'].shape)
+
+    # print(ret_dict['obj_scores_5'])
+    # print(ret_dict['obj_scores_5'].shape)
+    # print(ret_dict['sem_scores_5'])
+    # print(ret_dict['sem_scores_5'].shape)
 
     # print(ret_dict['dir_class'])
     # print(ret_dict['dir_res_norm'])

@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 
-from mmdet3d.core.bbox.coders import PartialBinBasedBBoxCoder
 from mmdet.core.bbox.builder import BBOX_CODERS
+from .partial_bin_based_bbox_coder import PartialBinBasedBBoxCoder
 
 
 @BBOX_CODERS.register_module()
@@ -118,6 +118,8 @@ class GroupFree3DBBoxCoder(PartialBinBasedBBoxCoder):
         # decode center
         end += 3
         # (batch_size, num_proposal, 3)
+        results['center_residual' + suffix] = \
+            reg_preds_trans[..., start:end].contiguous()
         results['center' + suffix] = base_xyz + \
             reg_preds_trans[..., start:end].contiguous()
         start = end

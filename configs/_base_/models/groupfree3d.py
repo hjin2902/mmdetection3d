@@ -17,18 +17,54 @@ model = dict(
             normalize_xyz=True)),
     bbox_head=dict(
         type='GroupFree3DHead',
-        transformer_cfg=dict(
-            num_decoder_layers=6,
-            self_pos_embed='loc_learned',
-            cross_pos_embed='xyz_learned',
-            d_model=288,
-            nhead=8,
-            dim_feedforward=2048,
-            dropout=0.1),
+        transformer_decoder_cfg=dict(
+            type='GroupFree3DTransformerDecoder',
+            num_layers=6,
+            transformerlayers=dict(
+                type='BaseTransformerLayer',
+                attn_cfgs=[
+                    dict(
+                        type='GroupFree3DMultiheadAttention',
+                        embed_dims=288,
+                        num_heads=8,
+                        dropout=0.1),
+                    dict(
+                        type='GroupFree3DMultiheadAttention',
+                        embed_dims=288,
+                        num_heads=8,
+                        dropout=0.1)
+                ],
+                feedforward_channels=2048,
+                ffn_dropout=0.1,
+                operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
+                                 'ffn', 'norm')),
+            pred_layer_cfg=dict(
+                in_channels=288, shared_conv_channels=(288, 288), bias=True),
+            bbox_coder=dict(
+                type='GroupFree3DBBoxCoder',
+                num_sizes=18,
+                num_dir_bins=1,
+                with_rot=False,
+                mean_sizes=[[0.76966727, 0.8116021, 0.92573744],
+                            [1.876858, 1.8425595, 1.1931566],
+                            [0.61328, 0.6148609, 0.7182701],
+                            [1.3955007, 1.5121545, 0.83443564],
+                            [0.97949594, 1.0675149, 0.6329687],
+                            [0.531663, 0.5955577, 1.7500148],
+                            [0.9624706, 0.72462326, 1.1481868],
+                            [0.83221924, 1.0490936, 1.6875663],
+                            [0.21132214, 0.4206159, 0.5372846],
+                            [1.4440073, 1.8970833, 0.26985747],
+                            [1.0294262, 1.4040797, 0.87554324],
+                            [1.3766412, 0.65521795, 1.6813129],
+                            [0.6650819, 0.71111923, 1.298853],
+                            [0.41999173, 0.37906948, 1.7513971],
+                            [0.59359556, 0.5912492, 0.73919016],
+                            [0.50867593, 0.50656086, 0.30136237],
+                            [1.1511526, 1.0546296, 0.49706793],
+                            [0.47535285, 0.49249494, 0.5802117]])),
         pred_layer_cfg=dict(
             in_channels=288, shared_conv_channels=(288, 288), bias=True),
-        conv_cfg=dict(type='Conv1d'),
-        norm_cfg=dict(type='BN1d'),
         objectness_loss=dict(
             type='CrossEntropyLoss',
             class_weight=[0.2, 0.8],
