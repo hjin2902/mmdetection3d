@@ -211,7 +211,9 @@ class GroupFree3DHead(nn.Module):
 
     def init_weights(self):
         """Initialize weights of transformer decoder in GroupFree3DHead."""
-        self.transformer_decoder.init_weights()
+        # TODO
+        for p in self.parameters():
+            nn.init.xavier_uniform_(p)
 
     def _get_cls_out_channels(self):
         """Return the channel number of classification outputs."""
