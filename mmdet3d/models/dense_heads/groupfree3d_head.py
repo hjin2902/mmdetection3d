@@ -1,5 +1,5 @@
 import copy
-import numpy as np
+# import numpy as np
 import torch
 from mmcv import ConfigDict
 from mmcv.cnn.bricks.transformer import build_transformer_layer
@@ -9,7 +9,7 @@ from torch.nn import functional as F
 
 from mmdet3d.core.post_processing import aligned_3d_nms
 from mmdet3d.models.builder import build_loss
-from mmdet3d.models.losses import chamfer_distance
+# from mmdet3d.models.losses import chamfer_distance
 from mmdet3d.ops import Points_Sampler, gather_points
 from mmdet.core import build_bbox_coder, multi_apply
 from mmdet.models import HEADS
@@ -511,8 +511,16 @@ class GroupFree3DHead(nn.Module):
             pts_semantic_mask = [None for i in range(len(gt_labels_3d))]
             pts_instance_mask = [None for i in range(len(gt_labels_3d))]
 
-        aggregated_points = [
-            bbox_preds['query_points_xyz'][i]
+        seed_points = [
+            bbox_preds['seed_points'][i] for i in range(len(gt_labels_3d))
+        ]
+
+        seed_indices = [
+            bbox_preds['seed_indices'][i] for i in range(len(gt_labels_3d))
+        ]
+
+        candidate_indices = [
+            bbox_preds['query_points_sample_inds'][i]
             for i in range(len(gt_labels_3d))
         ]
 
@@ -522,7 +530,8 @@ class GroupFree3DHead(nn.Module):
          objectness_masks) = multi_apply(self.get_targets_single, points,
                                          gt_bboxes_3d, gt_labels_3d,
                                          pts_semantic_mask, pts_instance_mask,
-                                         aggregated_points)
+                                         seed_points, seed_indices,
+                                         candidate_indices)
 
         # pad targets as original code of votenet.
         for index in range(len(gt_labels_3d)):
@@ -562,7 +571,10 @@ class GroupFree3DHead(nn.Module):
                            gt_labels_3d,
                            pts_semantic_mask=None,
                            pts_instance_mask=None,
-                           aggregated_points=None):
+                           seed_points=None,
+                           seed_indices=None,
+                           seed_points_obj_topk=5,
+                           candidate_indices=None):
         """Generate targets of vote head for single batch.
 
         Args:
@@ -584,54 +596,107 @@ class GroupFree3DHead(nn.Module):
 
         gt_bboxes_3d = gt_bboxes_3d.to(points.device)
 
-        # generate KPS target
-        # TODO
-        # num_points = points.shape[0]
+        # generate objectness targets in sampling head
+        gt_num = gt_labels_3d.shape[0]
+        seed_num = seed_points.shape[0]
 
+        object_assignment = torch.gather(pts_instance_mask, 0, seed_indices)
+        # set background points to the last gt bbox ??
+        object_assignment[object_assignment < 0] = gt_num - 1
+        object_assignment_one_hot = gt_bboxes_3d.tensor.new_zeros(
+            (seed_num, gt_num))
+        object_assignment_one_hot.scatter_(1, object_assignment.unsqueeze(-1),
+                                           1)  # (K, K2)
+
+        delta_xyz = seed_points.unsqueeze(
+            1) - gt_bboxes_3d.gravity_center.unsqueeze(0)  # (K, K2, 3)
+        delta_xyz = delta_xyz / (gt_bboxes_3d.dims.unsqueeze(0) + 1e-6
+                                 )  # (K, K2, 3)
+        new_dist = torch.sum(delta_xyz**2, dim=-1)
+        euclidean_dist1 = torch.sqrt(new_dist + 1e-6)  # KxK2
+        euclidean_dist1 = euclidean_dist1 * object_assignment_one_hot + 100 * (
+            1 - object_assignment_one_hot)  # KxK2
+        euclidean_dist1 = euclidean_dist1.transpose(0, 1).contiguous()  # K2xK
+
+        topk_inds = torch.topk(
+            euclidean_dist1, seed_points_obj_topk, largest=False)[1]  # K2xtopk
+        topk_inds = topk_inds.long()  # K2xtopk
+        topk_inds = topk_inds.view(-1).contiguous()  # K2xtopk
+
+        objectness_label = torch.zeros(
+            seed_num + 1, dtype=torch.long).to(points.device)
+        objectness_label[topk_inds] = 1
+        objectness_label = objectness_label[:seed_num]
+        objectness_label_mask = torch.gather(pts_instance_mask, 0,
+                                             seed_indices)  # B, num_seed
+        objectness_label[objectness_label_mask < 0] = 0
+
+        # objectness target
+        seed_obj_gt = torch.gather(pts_semantic_mask, 0,
+                                   seed_indices)  # B,num_seed
+        query_points_obj_gt = torch.gather(
+            seed_obj_gt, 0, candidate_indices)  # B, query_points
+
+        seed_instance_label = torch.gather(pts_instance_mask, 0,
+                                           seed_indices)  # B,num_seed
+        query_points_instance_label = torch.gather(
+            seed_instance_label, 0, candidate_indices)  # B,query_points
+
+        # Set assignment
+        # (B,K) with values in 0,1,...,K2-1
+        object_assignment = query_points_instance_label
+        object_assignment[
+            object_assignment <
+            0] = gt_num - 1  # set background points to the last gt bbox
+
+        # generate center, dir, size target
         (center_targets, size_class_targets, size_res_targets,
          dir_class_targets,
          dir_res_targets) = self.bbox_coder.encode(gt_bboxes_3d, gt_labels_3d)
 
-        proposal_num = aggregated_points.shape[0]
-        distance1, _, assignment, _ = chamfer_distance(
-            aggregated_points.unsqueeze(0),
-            center_targets.unsqueeze(0),
-            reduction='none')
-        assignment = assignment.squeeze(0)
-        euclidean_distance1 = torch.sqrt(distance1.squeeze(0) + 1e-6)
+        # distance1, _, assignment, _ = chamfer_distance(
+        #     aggregated_points.unsqueeze(0),
+        #     center_targets.unsqueeze(0),
+        #     reduction='none')
+        # assignment = assignment.squeeze(0)
+        # euclidean_distance1 = torch.sqrt(distance1.squeeze(0) + 1e-6)
 
-        objectness_targets = points.new_zeros((proposal_num), dtype=torch.long)
-        objectness_targets[
-            euclidean_distance1 < self.train_cfg['pos_distance_thr']] = 1
+        # objectness_targets = \
+        # points.new_zeros((proposal_num), dtype=torch.long)
+        # objectness_targets[
+        #     euclidean_distance1 < self.train_cfg['pos_distance_thr']] = 1
 
-        objectness_masks = points.new_zeros((proposal_num))
-        objectness_masks[
-            euclidean_distance1 < self.train_cfg['pos_distance_thr']] = 1.0
-        objectness_masks[
-            euclidean_distance1 > self.train_cfg['neg_distance_thr']] = 1.0
+        # objectness_masks = points.new_zeros((proposal_num))
+        # objectness_masks[
+        #     euclidean_distance1 < self.train_cfg['pos_distance_thr']] = 1.0
+        # objectness_masks[
+        #     euclidean_distance1 > self.train_cfg['neg_distance_thr']] = 1.0
 
-        dir_class_targets = dir_class_targets[assignment]
-        dir_res_targets = dir_res_targets[assignment]
-        dir_res_targets /= (np.pi / self.num_dir_bins)
-        size_class_targets = size_class_targets[assignment]
-        size_res_targets = size_res_targets[assignment]
+        # dir_class_targets = dir_class_targets[assignment]
+        # dir_res_targets = dir_res_targets[assignment]
+        # dir_res_targets /= (np.pi / self.num_dir_bins)
+        # size_class_targets = size_class_targets[assignment]
+        # size_res_targets = size_res_targets[assignment]
 
-        one_hot_size_targets = gt_bboxes_3d.tensor.new_zeros(
-            (proposal_num, self.num_sizes))
-        one_hot_size_targets.scatter_(1, size_class_targets.unsqueeze(-1), 1)
-        one_hot_size_targets = one_hot_size_targets.unsqueeze(-1).repeat(
-            1, 1, 3)
-        mean_sizes = size_res_targets.new_tensor(
-            self.bbox_coder.mean_sizes).unsqueeze(0)
-        pos_mean_sizes = torch.sum(one_hot_size_targets * mean_sizes, 1)
-        size_res_targets /= pos_mean_sizes
+        # one_hot_size_targets = gt_bboxes_3d.tensor.new_zeros(
+        #     (proposal_num, self.num_sizes))
+        # one_hot_size_targets.scatter_(1, size_class_targets.unsqueeze(-1), 1)
+        # one_hot_size_targets = one_hot_size_targets.unsqueeze(-1).repeat(
+        #     1, 1, 3)
+        # mean_sizes = size_res_targets.new_tensor(
+        #     self.bbox_coder.mean_sizes).unsqueeze(0)
+        # pos_mean_sizes = torch.sum(one_hot_size_targets * mean_sizes, 1)
+        # size_res_targets /= pos_mean_sizes
 
-        mask_targets = gt_labels_3d[assignment]
-        assigned_center_targets = center_targets[assignment]
+        # mask_targets = gt_labels_3d[assignment]
+        # assigned_center_targets = center_targets[assignment]
 
-        return (size_class_targets, size_res_targets, dir_class_targets,
-                dir_res_targets, center_targets, assigned_center_targets,
-                mask_targets.long(), objectness_targets, objectness_masks)
+        # return (vote_targets, vote_target_masks, size_class_targets,
+        #         size_res_targets, dir_class_targets,
+        #         dir_res_targets, center_targets, assigned_center_targets,
+        #         mask_targets.long(), objectness_targets, objectness_masks)
+
+        return query_points_obj_gt
 
     def get_bboxes(self,
                    points,
