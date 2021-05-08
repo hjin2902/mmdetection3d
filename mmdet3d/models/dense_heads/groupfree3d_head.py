@@ -1,5 +1,5 @@
 import copy
-# import numpy as np
+import numpy as np
 import torch
 from mmcv import ConfigDict
 from mmcv.cnn.bricks.transformer import build_transformer_layer
@@ -120,6 +120,7 @@ class GroupFree3DHead(nn.Module):
                  test_cfg=None,
                  num_proposal=128,
                  pred_layer_cfg=None,
+                 sampling_objectness_loss=None,
                  objectness_loss=None,
                  center_loss=None,
                  dir_class_loss=None,
@@ -195,6 +196,7 @@ class GroupFree3DHead(nn.Module):
                     num_cls_out_channels=self._get_cls_out_channels(),
                     num_reg_out_channels=self._get_reg_out_channels()))
 
+        self.sampling_objectness_loss = build_loss(sampling_objectness_loss)
         self.objectness_loss = build_loss(objectness_loss)
         self.center_loss = build_loss(center_loss)
         self.dir_res_loss = build_loss(dir_res_loss)
@@ -291,7 +293,7 @@ class GroupFree3DHead(nn.Module):
 
         results['query_points_xyz'] = candidate_xyz  # (B, M, 3)
         results['query_points_feature'] = candidate_features  # (B, C, M)
-        results['query_points_sample_inds'] = sample_inds  # (B, M)
+        results['query_points_sample_inds'] = sample_inds.long()  # (B, M)
 
         suffix = '_proposal'
         cls_predictions, reg_predictions = self.conv_pred(candidate_features)
@@ -310,6 +312,7 @@ class GroupFree3DHead(nn.Module):
         value = key
 
         # transformer decoder
+        results['num_decoder_layers'] = 0
         for i in range(self.num_decoder_layers):
             suffix = f'_{i}'
 
@@ -335,6 +338,8 @@ class GroupFree3DHead(nn.Module):
             results['bbox3d' + suffix] = bbox3d
             base_bbox3d = bbox3d[:, :, :6].detach().clone()
             query = query.permute(2, 0, 1)
+
+            results['num_decoder_layers'] += 1
 
         return results
 
@@ -372,95 +377,172 @@ class GroupFree3DHead(nn.Module):
         targets = self.get_targets(points, gt_bboxes_3d, gt_labels_3d,
                                    pts_semantic_mask, pts_instance_mask,
                                    bbox_preds)
-        (vote_targets, vote_target_masks, size_class_targets, size_res_targets,
-         dir_class_targets, dir_res_targets, center_targets,
+        (sampling_targets, sampling_weights, size_class_targets,
+         size_res_targets, dir_class_targets, dir_res_targets, center_targets,
          assigned_center_targets, mask_targets, valid_gt_masks,
          objectness_targets, objectness_weights, box_loss_weights,
          valid_gt_weights) = targets
 
-        # calculate vote loss
-        vote_loss = self.vote_module.get_loss(bbox_preds['seed_points'],
-                                              bbox_preds['vote_points'],
-                                              bbox_preds['seed_indices'],
-                                              vote_target_masks, vote_targets)
+        # print('assigned_center_targets: ', assigned_center_targets)
+        # print(assigned_center_targets.shape)
 
-        # calculate objectness loss
-        objectness_loss = self.objectness_loss(
-            bbox_preds['obj_scores'].transpose(2, 1),
-            objectness_targets,
-            weight=objectness_weights)
-
-        # calculate center loss
-        source2target_loss, target2source_loss = self.center_loss(
-            bbox_preds['center'],
-            center_targets,
-            src_weight=box_loss_weights,
-            dst_weight=valid_gt_weights)
-        center_loss = source2target_loss + target2source_loss
-
-        # calculate direction class loss
-        dir_class_loss = self.dir_class_loss(
-            bbox_preds['dir_class'].transpose(2, 1),
-            dir_class_targets,
-            weight=box_loss_weights)
-
-        # calculate direction residual loss
         batch_size, proposal_num = size_class_targets.shape[:2]
-        heading_label_one_hot = vote_targets.new_zeros(
-            (batch_size, proposal_num, self.num_dir_bins))
-        heading_label_one_hot.scatter_(2, dir_class_targets.unsqueeze(-1), 1)
-        dir_res_norm = torch.sum(
-            bbox_preds['dir_res_norm'] * heading_label_one_hot, -1)
-        dir_res_loss = self.dir_res_loss(
-            dir_res_norm, dir_res_targets, weight=box_loss_weights)
 
-        # calculate size class loss
-        size_class_loss = self.size_class_loss(
-            bbox_preds['size_class'].transpose(2, 1),
-            size_class_targets,
-            weight=box_loss_weights)
+        # calculate objectness classification loss
+        sampling_obj_score = bbox_preds['seeds_obj_cls_logits'].reshape(-1, 1)
+        sampling_objectness_loss = self.sampling_objectness_loss(
+            sampling_obj_score,
+            1 - sampling_targets.reshape(-1),
+            sampling_weights.reshape(-1),
+            avg_factor=batch_size)
 
-        # calculate size residual loss
-        one_hot_size_targets = vote_targets.new_zeros(
-            (batch_size, proposal_num, self.num_sizes))
-        one_hot_size_targets.scatter_(2, size_class_targets.unsqueeze(-1), 1)
-        one_hot_size_targets_expand = one_hot_size_targets.unsqueeze(
-            -1).repeat(1, 1, 1, 3).contiguous()
-        size_residual_norm = torch.sum(
-            bbox_preds['size_res_norm'] * one_hot_size_targets_expand, 2)
-        box_loss_weights_expand = box_loss_weights.unsqueeze(-1).repeat(
-            1, 1, 3)
-        size_res_loss = self.size_res_loss(
-            size_residual_norm,
-            size_res_targets,
-            weight=box_loss_weights_expand)
+        # print('sampling_objectness_loss: ', sampling_objectness_loss)
 
-        # calculate semantic loss
-        semantic_loss = self.semantic_loss(
-            bbox_preds['sem_scores'].transpose(2, 1),
-            mask_targets,
-            weight=box_loss_weights)
+        objectness_loss_sum = 0.0
+        center_loss_sum = 0.0
+        dir_class_loss_sum = 0.0
+        dir_res_loss_sum = 0.0
+        size_class_loss_sum = 0.0
+        size_res_loss_sum = 0.0
+        semantic_loss_sum = 0.0
+
+        suffixes = ['_proposal'] + [
+            f'_{i}' for i in range(bbox_preds['num_decoder_layers'])
+        ]
+        for suffix in suffixes:
+
+            # calculate objectness loss
+            obj_score = bbox_preds['obj_scores' + suffix].transpose(2,
+                                                                    1).reshape(
+                                                                        -1, 1)
+            objectness_loss = self.objectness_loss(
+                obj_score,
+                1 - objectness_targets.reshape(-1),
+                objectness_weights.reshape(-1),
+                avg_factor=batch_size)
+
+            objectness_loss_sum += objectness_loss
+
+            # print('objectness_targets: ', objectness_targets)
+            # print(objectness_targets.shape)
+            # print('objectness_weights: ', objectness_weights)
+            # print(objectness_weights.shape)
+            # print('obj_score: ', obj_score)
+            # print(obj_score.shape)
+            # print('objectness_loss: ', objectness_loss)
+
+            # calculate center loss
+            box_loss_weights_expand = box_loss_weights.unsqueeze(-1).repeat(
+                1, 1, 3)
+            center_loss = self.center_loss(
+                bbox_preds['center' + suffix],
+                assigned_center_targets,
+                weight=box_loss_weights_expand)
+
+            center_loss_sum += center_loss
+            # print(box_loss_weights_expand)
+            # print(bbox_preds['center' + suffix])
+            # print(bbox_preds['center' + suffix].shape)
+            # print("center_loss: ", center_loss)
+
+            # calculate direction class loss
+            dir_class_loss = self.dir_class_loss(
+                bbox_preds['dir_class' + suffix].transpose(2, 1),
+                dir_class_targets,
+                weight=box_loss_weights)
+
+            dir_class_loss_sum += dir_class_loss
+            # print(bbox_preds['dir_class_5'])
+            # print("dir_class_targets: ", dir_class_targets)
+            # print(dir_class_targets.shape)
+            # print("dir_class_loss: ", dir_class_loss)
+
+            # calculate direction residual loss
+            heading_label_one_hot = size_class_targets.new_zeros(
+                (batch_size, proposal_num, self.num_dir_bins))
+            heading_label_one_hot.scatter_(2, dir_class_targets.unsqueeze(-1),
+                                           1)
+            dir_res_norm = torch.sum(
+                bbox_preds['dir_res_norm' + suffix] * heading_label_one_hot,
+                -1)
+            dir_res_loss = self.dir_res_loss(
+                dir_res_norm, dir_res_targets, weight=box_loss_weights)
+
+            dir_res_loss_sum += dir_res_loss
+
+            # print("dir_res_loss: ", dir_res_loss)
+
+            # calculate size class loss
+            size_class_loss = self.size_class_loss(
+                bbox_preds['size_class' + suffix].transpose(2, 1),
+                size_class_targets,
+                weight=box_loss_weights)
+
+            size_class_loss_sum += size_class_loss
+
+            # print("size_class_loss: ", size_class_loss)
+
+            # calculate size residual loss
+            one_hot_size_targets = size_class_targets.new_zeros(
+                (batch_size, proposal_num, self.num_sizes))
+            one_hot_size_targets.scatter_(2, size_class_targets.unsqueeze(-1),
+                                          1)
+            one_hot_size_targets_expand = one_hot_size_targets.unsqueeze(
+                -1).repeat(1, 1, 1, 3).contiguous()
+            size_residual_norm = torch.sum(
+                bbox_preds['size_res_norm' + suffix] *
+                one_hot_size_targets_expand, 2)
+            box_loss_weights_expand = box_loss_weights.unsqueeze(-1).repeat(
+                1, 1, 3)
+            size_res_loss = self.size_res_loss(
+                size_residual_norm,
+                size_res_targets,
+                weight=box_loss_weights_expand)
+
+            size_res_loss_sum += size_res_loss
+
+            # print(size_res_targets)
+            # print(size_res_targets.shape)
+            # print("size_res_loss: ", size_res_loss)
+
+            # calculate semantic loss
+            semantic_loss = self.semantic_loss(
+                bbox_preds['sem_scores' + suffix].transpose(2, 1),
+                mask_targets,
+                weight=box_loss_weights)
+
+            semantic_loss_sum += semantic_loss
+
+            # print('semantic_loss: ', semantic_loss)
+
+        objectness_loss_sum /= len(suffixes)
+        semantic_loss_sum /= len(suffixes)
+        center_loss_sum /= len(suffixes)
+        dir_class_loss_sum /= len(suffixes)
+        dir_res_loss_sum /= len(suffixes)
+        size_class_loss_sum /= len(suffixes)
+        size_res_loss_sum /= len(suffixes)
 
         losses = dict(
-            vote_loss=vote_loss,
-            objectness_loss=objectness_loss,
-            semantic_loss=semantic_loss,
-            center_loss=center_loss,
-            dir_class_loss=dir_class_loss,
-            dir_res_loss=dir_res_loss,
-            size_class_loss=size_class_loss,
-            size_res_loss=size_res_loss)
+            sampling_objectness_loss=sampling_objectness_loss,
+            objectness_loss=objectness_loss_sum,
+            semantic_loss=semantic_loss_sum,
+            center_loss=center_loss_sum,
+            dir_class_loss=dir_class_loss_sum,
+            dir_res_loss=dir_res_loss_sum,
+            size_class_loss=size_class_loss_sum,
+            size_res_loss=size_res_loss_sum)
 
-        if self.iou_loss:
-            corners_pred = self.bbox_coder.decode_corners(
-                bbox_preds['center'], size_residual_norm,
-                one_hot_size_targets_expand)
-            corners_target = self.bbox_coder.decode_corners(
-                assigned_center_targets, size_res_targets,
-                one_hot_size_targets_expand)
-            iou_loss = self.iou_loss(
-                corners_pred, corners_target, weight=box_loss_weights)
-            losses['iou_loss'] = iou_loss
+        # if self.iou_loss:
+        #     corners_pred = self.bbox_coder.decode_corners(
+        #         bbox_preds['center'], size_residual_norm,
+        #         one_hot_size_targets_expand)
+        #     corners_target = self.bbox_coder.decode_corners(
+        #         assigned_center_targets, size_res_targets,
+        #         one_hot_size_targets_expand)
+        #     iou_loss = self.iou_loss(
+        #         corners_pred, corners_target, weight=box_loss_weights)
+        #     losses['iou_loss'] = iou_loss
 
         if ret_target:
             losses['targets'] = targets
@@ -524,7 +606,7 @@ class GroupFree3DHead(nn.Module):
             for i in range(len(gt_labels_3d))
         ]
 
-        (vote_targets, vote_target_masks, size_class_targets, size_res_targets,
+        (sampling_targets, size_class_targets, size_res_targets,
          dir_class_targets, dir_res_targets, center_targets,
          assigned_center_targets, mask_targets, objectness_targets,
          objectness_masks) = multi_apply(self.get_targets_single, points,
@@ -540,26 +622,35 @@ class GroupFree3DHead(nn.Module):
                                           (0, 0, 0, pad_num))
             valid_gt_masks[index] = F.pad(valid_gt_masks[index], (0, pad_num))
 
-        vote_targets = torch.stack(vote_targets)
-        vote_target_masks = torch.stack(vote_target_masks)
+        sampling_targets = torch.stack(sampling_targets)
+        sampling_weights = (sampling_targets >= 0).float()
+        sampling_normalizer = sampling_weights.sum(dim=1, keepdim=True).float()
+        sampling_weights /= torch.clamp(sampling_normalizer, min=1.0)
+
         center_targets = torch.stack(center_targets)
         valid_gt_masks = torch.stack(valid_gt_masks)
 
         assigned_center_targets = torch.stack(assigned_center_targets)
         objectness_targets = torch.stack(objectness_targets)
+
         objectness_weights = torch.stack(objectness_masks)
-        objectness_weights /= (torch.sum(objectness_weights) + 1e-6)
+        # objectness_weights /= (torch.sum(objectness_weights) + 1e-6)
+        cls_normalizer = objectness_weights.sum(dim=1, keepdim=True).float()
+        objectness_weights /= torch.clamp(cls_normalizer, min=1.0)
+
         box_loss_weights = objectness_targets.float() / (
             torch.sum(objectness_targets).float() + 1e-6)
+
         valid_gt_weights = valid_gt_masks.float() / (
             torch.sum(valid_gt_masks.float()) + 1e-6)
+
         dir_class_targets = torch.stack(dir_class_targets)
         dir_res_targets = torch.stack(dir_res_targets)
         size_class_targets = torch.stack(size_class_targets)
         size_res_targets = torch.stack(size_res_targets)
         mask_targets = torch.stack(mask_targets)
 
-        return (vote_targets, vote_target_masks, size_class_targets,
+        return (sampling_targets, sampling_weights, size_class_targets,
                 size_res_targets, dir_class_targets, dir_res_targets,
                 center_targets, assigned_center_targets, mask_targets,
                 valid_gt_masks, objectness_targets, objectness_weights,
@@ -573,8 +664,8 @@ class GroupFree3DHead(nn.Module):
                            pts_instance_mask=None,
                            seed_points=None,
                            seed_indices=None,
-                           seed_points_obj_topk=5,
-                           candidate_indices=None):
+                           candidate_indices=None,
+                           seed_points_obj_topk=4):
         """Generate targets of vote head for single batch.
 
         Args:
@@ -596,9 +687,10 @@ class GroupFree3DHead(nn.Module):
 
         gt_bboxes_3d = gt_bboxes_3d.to(points.device)
 
-        # generate objectness targets in sampling head
+        # 1. generate objectness targets in sampling head
         gt_num = gt_labels_3d.shape[0]
         seed_num = seed_points.shape[0]
+        candidate_num = candidate_indices.shape[0]
 
         object_assignment = torch.gather(pts_instance_mask, 0, seed_indices)
         # set background points to the last gt bbox ??
@@ -623,20 +715,27 @@ class GroupFree3DHead(nn.Module):
         topk_inds = topk_inds.long()  # K2xtopk
         topk_inds = topk_inds.view(-1).contiguous()  # K2xtopk
 
-        objectness_label = torch.zeros(
+        sampling_targets = torch.zeros(
             seed_num + 1, dtype=torch.long).to(points.device)
-        objectness_label[topk_inds] = 1
-        objectness_label = objectness_label[:seed_num]
+        sampling_targets[topk_inds] = 1
+        sampling_targets = sampling_targets[:seed_num]
         objectness_label_mask = torch.gather(pts_instance_mask, 0,
                                              seed_indices)  # B, num_seed
-        objectness_label[objectness_label_mask < 0] = 0
+        sampling_targets[objectness_label_mask < 0] = 0
 
-        # objectness target
+        # 2. objectness target
         seed_obj_gt = torch.gather(pts_semantic_mask, 0,
                                    seed_indices)  # B,num_seed
-        query_points_obj_gt = torch.gather(
-            seed_obj_gt, 0, candidate_indices)  # B, query_points
+        objectness_targets = torch.gather(seed_obj_gt, 0,
+                                          candidate_indices)  # B, query_points
 
+        objectness_targets[objectness_targets < self.num_classes] = 1
+        objectness_targets[objectness_targets == self.num_classes] = 0
+
+        # print('objectness_targets: ', objectness_targets)
+        # print(objectness_targets.shape)
+
+        # 3. box target
         seed_instance_label = torch.gather(pts_instance_mask, 0,
                                            seed_indices)  # B,num_seed
         query_points_instance_label = torch.gather(
@@ -644,15 +743,49 @@ class GroupFree3DHead(nn.Module):
 
         # Set assignment
         # (B,K) with values in 0,1,...,K2-1
-        object_assignment = query_points_instance_label
-        object_assignment[
-            object_assignment <
-            0] = gt_num - 1  # set background points to the last gt bbox
+        assignment = query_points_instance_label
+        assignment[assignment <
+                   0] = gt_num - 1  # set background points to the last gt bbox
 
         # generate center, dir, size target
         (center_targets, size_class_targets, size_res_targets,
          dir_class_targets,
          dir_res_targets) = self.bbox_coder.encode(gt_bboxes_3d, gt_labels_3d)
+
+        # print(size_res_targets)
+        # print(size_res_targets.shape)
+
+        # assigned_center_targets = center_targets[assignment]
+        assignment_expand = assignment.unsqueeze(1).repeat(1, 3)
+        assigned_center_targets = torch.gather(center_targets, 0,
+                                               assignment_expand)
+        # print(assignment_expand)
+        # dir_class_targets = dir_class_targets[assignment]
+        dir_class_targets = torch.gather(dir_class_targets, 0, assignment)
+
+        # dir_res_targets = dir_res_targets[assignment]
+        dir_res_targets = torch.gather(dir_res_targets, 0, assignment)
+        dir_res_targets /= (np.pi / self.num_dir_bins)
+
+        # size_class_targets = size_class_targets[assignment]
+        size_class_targets = torch.gather(size_class_targets, 0, assignment)
+
+        # size_res_targets = size_res_targets[assignment]
+        size_res_targets = torch.gather(size_res_targets, 0, assignment_expand)
+        one_hot_size_targets = gt_bboxes_3d.tensor.new_zeros(
+            (candidate_num, self.num_sizes))
+
+        one_hot_size_targets.scatter_(1, size_class_targets.unsqueeze(-1), 1)
+        one_hot_size_targets = one_hot_size_targets.unsqueeze(-1).repeat(
+            1, 1, 3)  # (K,num_size_cluster,3)
+
+        mean_sizes = size_res_targets.new_tensor(
+            self.bbox_coder.mean_sizes).unsqueeze(0)
+        pos_mean_sizes = torch.sum(one_hot_size_targets * mean_sizes, 1)
+        size_res_targets /= pos_mean_sizes
+
+        # mask_targets = gt_labels_3d[assignment]
+        mask_targets = torch.gather(gt_labels_3d, 0, assignment)
 
         # distance1, _, assignment, _ = chamfer_distance(
         #     aggregated_points.unsqueeze(0),
@@ -666,37 +799,12 @@ class GroupFree3DHead(nn.Module):
         # objectness_targets[
         #     euclidean_distance1 < self.train_cfg['pos_distance_thr']] = 1
 
-        # objectness_masks = points.new_zeros((proposal_num))
-        # objectness_masks[
-        #     euclidean_distance1 < self.train_cfg['pos_distance_thr']] = 1.0
-        # objectness_masks[
-        #     euclidean_distance1 > self.train_cfg['neg_distance_thr']] = 1.0
+        objectness_masks = points.new_ones((candidate_num))
 
-        # dir_class_targets = dir_class_targets[assignment]
-        # dir_res_targets = dir_res_targets[assignment]
-        # dir_res_targets /= (np.pi / self.num_dir_bins)
-        # size_class_targets = size_class_targets[assignment]
-        # size_res_targets = size_res_targets[assignment]
-
-        # one_hot_size_targets = gt_bboxes_3d.tensor.new_zeros(
-        #     (proposal_num, self.num_sizes))
-        # one_hot_size_targets.scatter_(1, size_class_targets.unsqueeze(-1), 1)
-        # one_hot_size_targets = one_hot_size_targets.unsqueeze(-1).repeat(
-        #     1, 1, 3)
-        # mean_sizes = size_res_targets.new_tensor(
-        #     self.bbox_coder.mean_sizes).unsqueeze(0)
-        # pos_mean_sizes = torch.sum(one_hot_size_targets * mean_sizes, 1)
-        # size_res_targets /= pos_mean_sizes
-
-        # mask_targets = gt_labels_3d[assignment]
-        # assigned_center_targets = center_targets[assignment]
-
-        # return (vote_targets, vote_target_masks, size_class_targets,
-        #         size_res_targets, dir_class_targets,
-        #         dir_res_targets, center_targets, assigned_center_targets,
-        #         mask_targets.long(), objectness_targets, objectness_masks)
-
-        return query_points_obj_gt
+        return (sampling_targets, size_class_targets, size_res_targets,
+                dir_class_targets,
+                dir_res_targets, center_targets, assigned_center_targets,
+                mask_targets.long(), objectness_targets, objectness_masks)
 
     def get_bboxes(self,
                    points,
