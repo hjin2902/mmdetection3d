@@ -87,7 +87,7 @@ class PositionEmbeddingLearned(nn.Module):
 
 @HEADS.register_module()
 class GroupFree3DHead(nn.Module):
-    r"""Bbox head of `Group-Free 3D https://arxiv.org/abs/2104.00678>`_.
+    r"""Bbox head of `Group-Free 3D <https://arxiv.org/abs/2104.00678>`_.
 
     Args:
         num_classes (int): The number of class.
@@ -755,23 +755,25 @@ class GroupFree3DHead(nn.Module):
         # print(size_res_targets)
         # print(size_res_targets.shape)
 
-        # assigned_center_targets = center_targets[assignment]
-        assignment_expand = assignment.unsqueeze(1).repeat(1, 3)
-        assigned_center_targets = torch.gather(center_targets, 0,
-                                               assignment_expand)
-        # print(assignment_expand)
-        # dir_class_targets = dir_class_targets[assignment]
-        dir_class_targets = torch.gather(dir_class_targets, 0, assignment)
+        assigned_center_targets = center_targets[assignment]
+        # assignment_expand = assignment.unsqueeze(1).repeat(1, 3)
+        # assigned_center_targets = torch.gather(center_targets, 0,
+        #                                        assignment_expand)
 
-        # dir_res_targets = dir_res_targets[assignment]
-        dir_res_targets = torch.gather(dir_res_targets, 0, assignment)
+        # print(assignment_expand)
+        dir_class_targets = dir_class_targets[assignment]
+        # dir_class_targets = torch.gather(dir_class_targets, 0, assignment)
+
+        dir_res_targets = dir_res_targets[assignment]
+        # dir_res_targets = torch.gather(dir_res_targets, 0, assignment)
         dir_res_targets /= (np.pi / self.num_dir_bins)
 
-        # size_class_targets = size_class_targets[assignment]
-        size_class_targets = torch.gather(size_class_targets, 0, assignment)
+        size_class_targets = size_class_targets[assignment]
+        # size_class_targets = torch.gather(size_class_targets, 0, assignment)
 
-        # size_res_targets = size_res_targets[assignment]
-        size_res_targets = torch.gather(size_res_targets, 0, assignment_expand)
+        size_res_targets = size_res_targets[assignment]
+        # size_res_targets = \
+        # torch.gather(size_res_targets, 0, assignment_expand)
         one_hot_size_targets = gt_bboxes_3d.tensor.new_zeros(
             (candidate_num, self.num_sizes))
 
@@ -784,8 +786,8 @@ class GroupFree3DHead(nn.Module):
         pos_mean_sizes = torch.sum(one_hot_size_targets * mean_sizes, 1)
         size_res_targets /= pos_mean_sizes
 
-        # mask_targets = gt_labels_3d[assignment]
-        mask_targets = torch.gather(gt_labels_3d, 0, assignment)
+        mask_targets = gt_labels_3d[assignment]
+        # mask_targets = torch.gather(gt_labels_3d, 0, assignment)
 
         # distance1, _, assignment, _ = chamfer_distance(
         #     aggregated_points.unsqueeze(0),
@@ -825,10 +827,14 @@ class GroupFree3DHead(nn.Module):
         Returns:
             list[tuple[torch.Tensor]]: Bounding boxes, scores and labels.
         """
+        # for suffix in self.test_cfg['suffixes']:
+        suffix = self.test_cfg['suffixes']
+
         # decode boxes
-        obj_scores = F.softmax(bbox_preds['obj_scores'], dim=-1)[..., -1]
-        sem_scores = F.softmax(bbox_preds['sem_scores'], dim=-1)
-        bbox3d = self.bbox_coder.decode(bbox_preds)
+        obj_scores = F.softmax(
+            bbox_preds['obj_scores' + suffix], dim=-1)[..., -1]
+        sem_scores = F.softmax(bbox_preds['sem_scores' + suffix], dim=-1)
+        bbox3d = self.bbox_coder.decode(bbox_preds, suffix)
 
         if use_nms:
             batch_size = bbox3d.shape[0]

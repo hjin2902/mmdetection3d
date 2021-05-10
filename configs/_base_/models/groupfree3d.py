@@ -1,5 +1,5 @@
 model = dict(
-    type='VoteNet',
+    type='GroupFree3DNet',
     backbone=dict(
         type='PointNet2SASSG',
         in_channels=3,
@@ -60,7 +60,8 @@ model = dict(
     train_cfg=dict(
         pos_distance_thr=0.3, neg_distance_thr=0.6, sample_mod='kps'),
     test_cfg=dict(
-        sample_mod='seed',
+        sample_mod='kps',
         nms_thr=0.25,
         score_thr=0.05,
-        per_class_proposal=True))
+        per_class_proposal=True,
+        suffixes='_5'))

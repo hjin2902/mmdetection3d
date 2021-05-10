@@ -5,7 +5,7 @@ import random
 import torch
 from os.path import dirname, exists, join
 
-from mmdet3d.core.bbox import LiDARInstance3DBoxes
+from mmdet3d.core.bbox import DepthInstance3DBoxes, LiDARInstance3DBoxes
 from mmdet3d.models.builder import build_detector, build_head
 
 # from mmdet.apis import set_random_seed
@@ -648,7 +648,7 @@ def test_vote_net():
     #     # print(param_tensor)
     #     print(param_tensor,'\t',self.state_dict()[param_tensor].size())
 
-    # load_checkpoint_net('tests/scannet_l6o256.pth', self)
+    load_checkpoint_net('tests/scannet_l6o256.pth', self)
 
     self.cuda()
 
@@ -658,6 +658,7 @@ def test_vote_net():
 
     points_0 = torch.rand([40000, 3], device='cuda')
     points_1 = torch.rand([40000, 3], device='cuda')
+
     points = [points_0, points_1]
 
     points_cat = torch.stack(points)
@@ -665,10 +666,101 @@ def test_vote_net():
     print(points_cat)
 
     x = self.extract_feat(points_cat)
+    # for k, v in x.items():
+    #     print(k)
+    #     print(v[-1])
     bbox_preds = self.bbox_head(x, 'kps')
 
-    for k, v in bbox_preds.items():
-        print(k)
+    # print(bbox_preds['center_5'])
+    # print(bbox_preds['center_5'].shape)
+
+    # for k, v in bbox_preds.items():
+    #     print(k)
+
+    # test loss
+    _setup_seed(0)
+    gt_bbox1 = torch.rand([10, 7], dtype=torch.float32).cuda()
+    gt_bbox2 = torch.rand([10, 7], dtype=torch.float32).cuda()
+
+    gt_bbox1 = LiDARInstance3DBoxes(gt_bbox1)
+    gt_bbox2 = LiDARInstance3DBoxes(gt_bbox2)
+    gt_bboxes = [gt_bbox1, gt_bbox2]
+    # print('gt_bboxes: ', gt_bboxes)
+
+    pts_instance_mask_1 = torch.randint(0, 10, [40000], device='cuda')
+    pts_instance_mask_2 = torch.randint(0, 10, [40000], device='cuda')
+    pts_instance_mask = [pts_instance_mask_1, pts_instance_mask_2]
+    # print(pts_instance_mask)
+
+    pts_semantic_mask_1 = torch.randint(0, 19, [40000], device='cuda')
+    pts_semantic_mask_2 = torch.randint(0, 19, [40000], device='cuda')
+    pts_semantic_mask = [pts_semantic_mask_1, pts_semantic_mask_2]
+    # print(pts_semantic_mask)
+
+    labels_1 = torch.randint(0, 18, [10], device='cuda')
+    labels_2 = torch.randint(0, 18, [10], device='cuda')
+    gt_labels = [labels_1, labels_2]
+    # print(gt_labels)
+
+    losses = self.bbox_head.loss(bbox_preds, points, gt_bboxes, gt_labels,
+                                 pts_semantic_mask, pts_instance_mask)
+
+    loss_sum = torch.tensor([0.0])
+    for k, v in losses.items():
+        loss_sum += v
+
+    print('loss_sum: ', loss_sum)
+
+    # test multiclass_nms_single
+    obj_scores = torch.rand([256], device='cuda')
+    sem_scores = torch.rand([256, 18], device='cuda')
+    points = torch.rand([40000, 3], device='cuda')
+    bbox = torch.rand([256, 7], device='cuda')
+    input_meta = dict(box_type_3d=DepthInstance3DBoxes)
+    bbox_selected, score_selected, labels = \
+        self.bbox_head.multiclass_nms_single(obj_scores,
+                                             sem_scores,
+                                             bbox,
+                                             points,
+                                             input_meta)
+    assert bbox_selected.shape[0] >= 0
+    assert bbox_selected.shape[1] == 7
+    assert score_selected.shape[0] >= 0
+    assert labels.shape[0] >= 0
+
+    # test get_boxes
+    points = torch.rand([1, 40000, 3], device='cuda')
+    seed_points = torch.rand([1, 1024, 3], device='cuda')
+    seed_indices = torch.randint(0, 40000, [1, 1024], device='cuda')
+    obj_scores = torch.rand([1, 256, 1], device='cuda')
+    center = torch.rand([1, 256, 3], device='cuda')
+    dir_class = torch.rand([1, 256, 1], device='cuda')
+    dir_res_norm = torch.rand([1, 256, 1], device='cuda')
+    dir_res = torch.rand([1, 256, 1], device='cuda')
+    size_class = torch.rand([1, 256, 18], device='cuda')
+    size_res = torch.rand([1, 256, 18, 3], device='cuda')
+    sem_scores = torch.rand([1, 256, 18], device='cuda')
+    bbox_preds = dict(
+        seed_points=seed_points,
+        seed_indices=seed_indices,
+        obj_scores_5=obj_scores,
+        center_5=center,
+        dir_class_5=dir_class,
+        dir_res_norm_5=dir_res_norm,
+        dir_res_5=dir_res,
+        size_class_5=size_class,
+        size_res_5=size_res,
+        sem_scores_5=sem_scores)
+    results = self.bbox_head.get_bboxes(points, bbox_preds, [input_meta])
+    assert results[0][0].tensor.shape[0] >= 0
+    assert results[0][0].tensor.shape[1] == 7
+    assert results[0][1].shape[0] >= 0
+    assert results[0][2].shape[0] >= 0
+
+    print(results[0])
+    print(results[0][0].tensor.shape)
+    print(results[0][1].shape)
+    print(results[0][2].shape)
 
 
 def test_model():
