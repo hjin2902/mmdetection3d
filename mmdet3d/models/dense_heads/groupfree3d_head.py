@@ -470,7 +470,7 @@ class GroupFree3DHead(nn.Module):
 
             dir_res_loss_sum += dir_res_loss
 
-            # print("dir_res_loss: ", dir_res_loss)
+            print('dir_res_loss: ', dir_res_loss)
 
             # calculate size class loss
             size_class_loss = self.size_class_loss(

@@ -25,9 +25,13 @@ model = dict(
                 type='GroupFree3DMultiheadAttention',
                 embed_dims=288,
                 num_heads=8,
-                dropout=0.1),
-            feedforward_channels=2048,
-            ffn_dropout=0.1,
+                attn_drop=0.1,
+                dropout_layer=dict(type='DropOut', drop_prob=0.1)),
+            ffn_cfgs=dict(
+                embed_dims=288,
+                feedforward_channels=2048,
+                ffn_drop=0.1,
+                act_cfg=dict(type='ReLU', inplace=True)),
             operation_order=('self_attn', 'norm', 'cross_attn', 'norm', 'ffn',
                              'norm')),
         pred_layer_cfg=dict(
