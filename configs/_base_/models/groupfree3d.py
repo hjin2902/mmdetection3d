@@ -49,11 +49,14 @@ model = dict(
             alpha=0.25,
             loss_weight=1.0),
         center_loss=dict(
-            type='SmoothL1Loss', reduction='sum', loss_weight=10.0),
+            type='SmoothL1Loss', beta=0.04, reduction='sum', loss_weight=10.0),
         dir_class_loss=dict(
             type='CrossEntropyLoss', reduction='sum', loss_weight=1.0),
         dir_res_loss=dict(
-            type='SmoothL1Loss', reduction='sum', loss_weight=10.0),
+            type='SmoothL1Loss',
+            beta=0.111111111111,
+            reduction='sum',
+            loss_weight=10.0 * 0.111111111111),
         size_class_loss=dict(
             type='CrossEntropyLoss', reduction='sum', loss_weight=1.0),
         size_res_loss=dict(

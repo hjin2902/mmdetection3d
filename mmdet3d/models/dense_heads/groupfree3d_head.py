@@ -448,8 +448,8 @@ class GroupFree3DHead(nn.Module):
             # print("center_loss: ", center_loss)
 
             # calculate direction class loss
-            print('box_loss_weights: ', box_loss_weights)
-            print(box_loss_weights.shape)
+            # print('box_loss_weights: ', box_loss_weights)
+            # print(box_loss_weights.shape)
             dir_class_loss = self.dir_class_loss(
                 bbox_preds['dir_class' + suffix].transpose(2, 1),
                 dir_class_targets,
@@ -710,8 +710,8 @@ class GroupFree3DHead(nn.Module):
                 pts_instance_label[indices] = instance_lable
                 pts_obj_mask[indices] = 1
 
-        # pts_instance_label = pts_instance_mask
-        # pts_obj_mask = pts_semantic_mask
+        pts_instance_label = pts_instance_mask
+        pts_obj_mask = pts_semantic_mask
 
         # 1. generate objectness targets in sampling head
         gt_num = gt_labels_3d.shape[0]
@@ -761,8 +761,8 @@ class GroupFree3DHead(nn.Module):
         objectness_targets = torch.gather(seed_obj_gt, 0,
                                           candidate_indices)  # query_points
 
-        # objectness_targets[objectness_targets < self.num_classes] = 1
-        # objectness_targets[objectness_targets == self.num_classes] = 0
+        objectness_targets[objectness_targets < self.num_classes] = 1
+        objectness_targets[objectness_targets == self.num_classes] = 0
 
         # print('objectness_targets: ', objectness_targets)
         # print(objectness_targets.shape)
