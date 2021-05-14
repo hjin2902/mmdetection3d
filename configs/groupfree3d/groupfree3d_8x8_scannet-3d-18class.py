@@ -141,8 +141,9 @@ data = dict(
         box_type_3d='Depth'))
 
 # optimizer
+lr = 0.006
 optimizer = dict(
-    lr=0.006,
+    lr=lr,
     weight_decay=0.0005,
     paramwise_cfg=dict(
         custom_keys={
@@ -154,6 +155,9 @@ optimizer = dict(
             'bbox_head.decoder_query_proj': dict(lr_mult=0.1, decay_mult=1.0),
             'bbox_head.decoder_key_proj': dict(lr_mult=0.1, decay_mult=1.0)
         }))
+lr_config = dict(policy='step', warmup=None, step=[280, 340])
+# runtime settings
+runner = dict(type='EpochBasedRunner', max_epochs=400)
 # yapf:disable
 log_config = dict(
     interval=30,
