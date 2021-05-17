@@ -198,6 +198,14 @@ def main():
             CLASSES=datasets[0].CLASSES)
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
+
+    state = {
+        'config': cfg,
+        'model': model.state_dict(),
+        'epoch': 0,
+    }
+    torch.save(state, os.path.join(args.work_dir, 'ckpt_epoch_0.pth'))
+
     train_detector(
         model,
         datasets,

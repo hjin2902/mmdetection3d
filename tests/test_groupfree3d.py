@@ -1,4 +1,5 @@
 import copy
+import mmcv
 import numpy as np
 import pytest
 import random
@@ -6,6 +7,8 @@ import torch
 from os.path import dirname, exists, join
 
 from mmdet3d.core.bbox import DepthInstance3DBoxes, LiDARInstance3DBoxes
+from mmdet3d.datasets import ScanNetDataset
+from mmdet3d.datasets.pipelines import Compose
 from mmdet3d.models.builder import build_detector, build_head
 
 # from mmdet.apis import set_random_seed
@@ -763,7 +766,119 @@ def test_vote_net():
     print(results[0][2].shape)
 
 
-def test_model():
+def test_getitem():
+    np.random.seed(0)
+    root_path = './tests/data/scannet_one/'
+    ann_file = './tests/data/scannet_one/scannet_infos_train.pkl'
+    class_names = ('cabinet', 'bed', 'chair', 'sofa', 'table', 'door',
+                   'window', 'bookshelf', 'picture', 'counter', 'desk',
+                   'curtain', 'refrigerator', 'showercurtrain', 'toilet',
+                   'sink', 'bathtub', 'garbagebin')
+    pipelines = [
+        dict(
+            type='LoadPointsFromFile',
+            coord_type='DEPTH',
+            shift_height=False,
+            load_dim=6,
+            use_dim=[0, 1, 2]),
+        dict(
+            type='LoadAnnotations3D',
+            with_bbox_3d=True,
+            with_label_3d=True,
+            with_mask_3d=True,
+            with_seg_3d=True),
+        # dict(type='IndoorPointSample', num_points=50000),
+        # dict(
+        #     type='RandomFlip3D',
+        #     sync_2d=False,
+        #     flip_ratio_bev_horizontal=1.0,
+        #     flip_ratio_bev_vertical=1.0),
+        # dict(
+        #     type='GlobalRotScaleTrans',
+        #     rot_range=[-0.087266, 0.087266],
+        #     scale_ratio_range=[1.0, 1.0],
+        #     shift_height=True),
+        dict(type='DefaultFormatBundle3D', class_names=class_names),
+        dict(
+            type='Collect3D',
+            keys=[
+                'points', 'gt_bboxes_3d', 'gt_labels_3d', 'pts_semantic_mask',
+                'pts_instance_mask'
+            ],
+            meta_keys=['file_name', 'sample_idx', 'pcd_rotation']),
+    ]
+
+    scannet_dataset = ScanNetDataset(root_path, ann_file, pipelines)
+    data = scannet_dataset[0]
+    points = data['points']._data
+    print('points')
+    print(points.shape)
+    print(points[0])
+    gt_bboxes_3d = data['gt_bboxes_3d']._data
+    # gt_labels = data['gt_labels_3d']._data
+    pts_semantic_mask = data['pts_semantic_mask']._data
+    print('pts_semantic_mask:', pts_semantic_mask.shape)
+    pts_instance_mask = data['pts_instance_mask']._data
+    file_name = data['img_metas']._data['file_name']
+    sample_idx = data['img_metas']._data['sample_idx']
+
+    assert file_name == './tests/data/scannet_one/points/scene0001_01.bin'
+    assert sample_idx == 'scene0001_01'
+
+    original_classes = scannet_dataset.CLASSES
+
+    assert scannet_dataset.CLASSES == class_names
+    assert gt_bboxes_3d.tensor[:5].shape == (5, 7)
+    assert original_classes == class_names
+
+    print('gt_bboxes_3d.shape: ', gt_bboxes_3d.tensor.shape)
+    print('pts_semantic_mask.shape: ', pts_semantic_mask.shape)
+
+    # test pipeline
+    pipeline = Compose(pipelines)
+    info = mmcv.load('./tests/data/scannet_one/scannet_infos_train.pkl')[0]
+    results = dict()
+    data_path = './tests/data/scannet_one'
+    results['pts_filename'] = join(data_path, info['pts_path'])
+    if info['annos']['gt_num'] != 0:
+        scannet_gt_bboxes_3d = info['annos']['gt_boxes_upright_depth'].astype(
+            np.float32)
+        scannet_gt_labels_3d = info['annos']['class'].astype(np.long)
+    else:
+        scannet_gt_bboxes_3d = np.zeros((1, 6), dtype=np.float32)
+        scannet_gt_labels_3d = np.zeros((1, ), dtype=np.long)
+    results['ann_info'] = dict()
+    results['ann_info']['pts_instance_mask_path'] = join(
+        data_path, info['pts_instance_mask_path'])
+    results['ann_info']['pts_semantic_mask_path'] = join(
+        data_path, info['pts_semantic_mask_path'])
+    results['ann_info']['gt_bboxes_3d'] = DepthInstance3DBoxes(
+        scannet_gt_bboxes_3d, box_dim=6, with_yaw=False)
+    results['ann_info']['gt_labels_3d'] = scannet_gt_labels_3d
+
+    results['img_fields'] = []
+    results['bbox3d_fields'] = []
+    results['pts_mask_fields'] = []
+    results['pts_seg_fields'] = []
+
+    results = pipeline(results)
+
+    points = results['points']._data
+    # print('points')
+    # print(points.shape)
+    # print(points[0])
+    gt_bboxes_3d = results['gt_bboxes_3d']._data
+    gt_labels_3d = results['gt_labels_3d']._data
+    pts_semantic_mask = results['pts_semantic_mask']._data
+    pts_instance_mask = results['pts_instance_mask']._data
+
+    print('gt_bboxes_3d: ', gt_bboxes_3d)
+    print('gt_labels_3d: ', gt_labels_3d)
+    print('pts_semantic_mask: ', pts_semantic_mask)
+    print('pts_instance_mask: ', pts_instance_mask)
+
+
+def test_preprocess():
     xyz = np.fromfile('tests/data/sunrgbd/points/000001.bin', np.float32)
 
     # (B, N, 3)
@@ -776,5 +891,6 @@ def test_model():
 
 if __name__ == '__main__':
     # test_vote_head()
-    test_vote_net()
+    # test_vote_net()
+    test_getitem()
     print('!!!!!!!!!!!!')

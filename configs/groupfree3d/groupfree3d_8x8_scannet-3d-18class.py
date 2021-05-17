@@ -8,8 +8,6 @@ _base_ = [
 model = dict(
     bbox_head=dict(
         num_classes=18,
-        valid_cat_ids=(3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 24, 28, 33, 34,
-                       36, 39),
         in_channels=288,
         bbox_coder=dict(
             type='GroupFree3DBBoxCoder',
@@ -58,16 +56,16 @@ train_pipeline = [
         type='PointSegClassMapping',
         valid_cat_ids=(3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 24, 28, 33, 34,
                        36, 39)),
-    dict(type='IndoorPointSample', num_points=50000),
-    dict(
-        type='RandomFlip3D',
-        sync_2d=False,
-        flip_ratio_bev_horizontal=0.5,
-        flip_ratio_bev_vertical=0.5),
-    dict(
-        type='GlobalRotScaleTrans',
-        rot_range=[-0.087266, 0.087266],
-        scale_ratio_range=[1.0, 1.0]),
+    # dict(type='IndoorPointSample', num_points=50000),
+    # dict(
+    #     type='RandomFlip3D',
+    #     sync_2d=False,
+    #     flip_ratio_bev_horizontal=0.5,
+    #     flip_ratio_bev_vertical=0.5),
+    # dict(
+    #     type='GlobalRotScaleTrans',
+    #     rot_range=[-0.087266, 0.087266],
+    #     scale_ratio_range=[1.0, 1.0]),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(
         type='Collect3D',
@@ -108,11 +106,11 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=8,
+    samples_per_gpu=1,
     workers_per_gpu=4,
     train=dict(
         type='RepeatDataset',
-        times=5,
+        times=1,
         dataset=dict(
             type=dataset_type,
             data_root=data_root,
@@ -160,7 +158,7 @@ lr_config = dict(policy='step', warmup=None, step=[280, 340])
 runner = dict(type='EpochBasedRunner', max_epochs=400)
 # yapf:disable
 log_config = dict(
-    interval=30,
+    interval=1,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook')
