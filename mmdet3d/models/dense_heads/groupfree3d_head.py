@@ -615,8 +615,6 @@ class GroupFree3DHead(nn.Module):
         for index in range(len(gt_labels_3d)):
             # +1: the last one for the empty target ?
             pad_num = max_gt_num - gt_labels_3d[index].shape[0] + 1
-            center_targets[index] = F.pad(center_targets[index],
-                                          (0, 0, 0, pad_num))
             valid_gt_masks[index] = F.pad(valid_gt_masks[index], (0, pad_num))
 
         sampling_targets = torch.stack(sampling_targets)
