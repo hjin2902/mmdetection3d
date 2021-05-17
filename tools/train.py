@@ -199,17 +199,6 @@ def main():
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
 
-    state_dict = torch.load(
-        '/home/SENSETIME/jinhui/new_scannet_l6o256.pth', map_location='cpu')
-    model.load_state_dict(state_dict)
-
-    state = {
-        'config': cfg,
-        'model': model.state_dict(),
-        'epoch': 0,
-    }
-    torch.save(state, os.path.join(args.work_dir, 'ckpt_epoch_0.pth'))
-
     train_detector(
         model,
         datasets,
