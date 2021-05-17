@@ -474,6 +474,9 @@ def load_checkpoint_net(checkpoint_path, model):
     model.load_state_dict(state_dict)
     # print(state_dict)
 
+    torch.save(state_dict, '/home/SENSETIME/jinhui/new_scannet_l6o256.pth')
+    print('new_scannet_l6o256.pth saved in net successfully!!!')
+
     print(f'{checkpoint_path} loaded in net successfully!!!')
 
     del checkpoint

@@ -153,7 +153,10 @@ optimizer = dict(
             'bbox_head.decoder_query_proj': dict(lr_mult=0.1, decay_mult=1.0),
             'bbox_head.decoder_key_proj': dict(lr_mult=0.1, decay_mult=1.0)
         }))
+
+optimizer_config = dict(grad_clip=dict(max_norm=0.1, norm_type=2))
 lr_config = dict(policy='step', warmup=None, step=[280, 340])
+
 # runtime settings
 runner = dict(type='EpochBasedRunner', max_epochs=400)
 # yapf:disable

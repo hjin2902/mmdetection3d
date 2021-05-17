@@ -433,18 +433,18 @@ class GroupFree3DHead(nn.Module):
             if i == 0:
                 print('base_bbox3d: ', base_bbox3d)
                 print(base_bbox3d.shape)
-                print(
-                    'conv1: ', self.decoder_self_posembeds[i].
-                    position_embedding_head[0].weight)
-                print(
-                    'conv1 bias: ', self.decoder_self_posembeds[i].
-                    position_embedding_head[0].bias.sum())
-                print(
-                    'conv2: ', self.decoder_self_posembeds[i].
-                    position_embedding_head[3].weight)
-                print(
-                    'conv2 bias: ', self.decoder_self_posembeds[i].
-                    position_embedding_head[3].bias.sum())
+                # print(
+                #     'conv1: ', self.decoder_self_posembeds[i].
+                #     position_embedding_head[0].weight)
+                # print(
+                #     'conv1 bias: ', self.decoder_self_posembeds[i].
+                #     position_embedding_head[0].bias.sum())
+                # print(
+                #     'conv2: ', self.decoder_self_posembeds[i].
+                #     position_embedding_head[3].weight)
+                # print(
+                #     'conv2 bias: ', self.decoder_self_posembeds[i].
+                #     position_embedding_head[3].bias.sum())
                 print('query_pos: ', query_pos)
                 print(query_pos.shape)
                 print(query_pos.sum())
@@ -547,7 +547,7 @@ class GroupFree3DHead(nn.Module):
         # print('sampling_weights: ', sampling_weights)
         # print(sampling_weights.shape)
         # print(sampling_weights.sum())
-        # print('sampling_objectness_loss: ', sampling_objectness_loss)
+        print('sampling_objectness_loss: ', sampling_objectness_loss)
 
         objectness_loss_sum = 0.0
         center_loss_sum = 0.0
@@ -573,8 +573,8 @@ class GroupFree3DHead(nn.Module):
                 avg_factor=batch_size)
 
             objectness_loss_sum += objectness_loss
-            if suffix == '_proposal':
-                print('objectness_loss_proposal: ', objectness_loss)
+
+            print(f'objectness_loss{suffix}: ', objectness_loss)
 
             # print('objectness_targets: ', objectness_targets)
             # print(objectness_targets.shape)
@@ -593,8 +593,7 @@ class GroupFree3DHead(nn.Module):
                 weight=box_loss_weights_expand)
 
             center_loss_sum += center_loss
-            if suffix == '_proposal':
-                print('center_loss_proposal: ', center_loss)
+            print(f'center_loss{suffix}: ', center_loss)
             # print(box_loss_weights_expand)
             # print(bbox_preds['center' + suffix])
             # print(bbox_preds['center' + suffix].shape)
@@ -609,8 +608,7 @@ class GroupFree3DHead(nn.Module):
                 weight=box_loss_weights)
 
             dir_class_loss_sum += dir_class_loss
-            if suffix == '_proposal':
-                print('dir_class_loss_proposal: ', dir_class_loss)
+            print(f'dir_class_loss{suffix}: ', dir_class_loss)
             # print(bbox_preds['dir_class_5'])
             # print("dir_class_targets: ", dir_class_targets)
             # print(dir_class_targets.shape)
@@ -628,8 +626,7 @@ class GroupFree3DHead(nn.Module):
                 dir_res_norm, dir_res_targets, weight=box_loss_weights)
 
             dir_res_loss_sum += dir_res_loss
-            if suffix == '_proposal':
-                print('dir_res_loss_proposal: ', dir_res_loss)
+            print(f'dir_res_loss{suffix}: ', dir_res_loss)
 
             # print('dir_res_loss: ', dir_res_loss)
 
@@ -640,8 +637,7 @@ class GroupFree3DHead(nn.Module):
                 weight=box_loss_weights)
 
             size_class_loss_sum += size_class_loss
-            if suffix == '_proposal':
-                print('size_class_loss_proposal: ', size_class_loss)
+            print(f'size_class_loss{suffix}: ', size_class_loss)
 
             # print("size_class_loss: ", size_class_loss)
 
@@ -663,10 +659,10 @@ class GroupFree3DHead(nn.Module):
                 weight=box_loss_weights_expand)
 
             size_res_loss_sum += size_res_loss
-            if suffix == '_proposal':
-                # print('size_residual_norm: ', size_residual_norm)
-                # print('box_loss_weights_expand: ', box_loss_weights_expand)
-                print('size_res_loss_proposal: ', size_res_loss)
+
+            # print('size_residual_norm: ', size_residual_norm)
+            # print('box_loss_weights_expand: ', box_loss_weights_expand)
+            print(f'size_res_loss{suffix}: ', size_res_loss)
 
             # print(size_res_targets)
             # print(size_res_targets.shape)
@@ -680,10 +676,21 @@ class GroupFree3DHead(nn.Module):
 
             semantic_loss_sum += semantic_loss
 
-            if suffix == '_proposal':
-                print('semantic_loss_proposal: ', semantic_loss)
+            print(f'semantic_loss{suffix}: ', semantic_loss)
 
             # print('semantic_loss: ', semantic_loss)
+
+        print('query_points_generation_loss: ', sampling_objectness_loss / 8)
+
+        sum_heads_box_loss = center_loss_sum + dir_class_loss_sum + \
+            dir_res_loss_sum + size_class_loss_sum + size_res_loss_sum
+        print('sum_heads_box_loss: ', sum_heads_box_loss)
+        print('sum_heads_objectness_loss: ', objectness_loss_sum)
+        print('sum_heads_sem_cls_loss: ', semantic_loss_sum)
+
+        loss_sum = sampling_objectness_loss + \
+            (objectness_loss_sum + sum_heads_box_loss + semantic_loss_sum) / 7
+        print('loss: ', loss_sum)
 
         objectness_loss_sum /= len(suffixes)
         semantic_loss_sum /= len(suffixes)
