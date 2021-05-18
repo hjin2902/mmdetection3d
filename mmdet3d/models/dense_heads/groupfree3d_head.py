@@ -160,9 +160,6 @@ class GroupFree3DHead(nn.Module):
         # Initial object candidate sampling
         self.gsample_module = GeneralSamplingModule()
         self.fps_module = Points_Sampler([self.num_proposal])
-        torch.manual_seed(0)
-        torch.cuda.manual_seed_all(0)
-        torch.backends.cudnn.deterministic = True
         self.points_obj_cls = PointsObjClsModule(self.in_channels)
 
         self.fp16_enabled = False
@@ -174,14 +171,8 @@ class GroupFree3DHead(nn.Module):
             num_reg_out_channels=self._get_reg_out_channels())
 
         # query proj and key proj
-        torch.manual_seed(0)
-        torch.cuda.manual_seed_all(0)
-        torch.backends.cudnn.deterministic = True
         self.decoder_query_proj = nn.Conv1d(
             self.embed_dims, self.embed_dims, kernel_size=1)
-        torch.manual_seed(0)
-        torch.cuda.manual_seed_all(0)
-        torch.backends.cudnn.deterministic = True
         self.decoder_key_proj = nn.Conv1d(
             self.embed_dims, self.embed_dims, kernel_size=1)
 
@@ -226,23 +217,14 @@ class GroupFree3DHead(nn.Module):
         # initialize transformer
         for m in self.decoder_layers.parameters():
             if m.dim() > 1:
-                torch.manual_seed(0)
-                torch.cuda.manual_seed_all(0)
-                torch.backends.cudnn.deterministic = True
                 nn.init.xavier_uniform_(m)
 
         for m in self.decoder_self_posembeds.parameters():
             if m.dim() > 1:
-                torch.manual_seed(0)
-                torch.cuda.manual_seed_all(0)
-                torch.backends.cudnn.deterministic = True
                 nn.init.xavier_uniform_(m)
 
         for m in self.decoder_cross_posembeds.parameters():
             if m.dim() > 1:
-                torch.manual_seed(0)
-                torch.cuda.manual_seed_all(0)
-                torch.backends.cudnn.deterministic = True
                 nn.init.xavier_uniform_(m)
 
     def _get_cls_out_channels(self):
