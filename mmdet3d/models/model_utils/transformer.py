@@ -24,11 +24,13 @@ class GroupFree3DMultiheadAttention(MultiheadAttention):
                  embed_dims,
                  num_heads,
                  attn_drop=0.,
+                 proj_drop=0.,
                  dropout_layer=dict(type='DropOut', drop_prob=0.),
                  init_cfg=None,
+                 batch_first=False,
                  **kwargs):
-        super().__init__(embed_dims, num_heads, attn_drop, dropout_layer,
-                         init_cfg, **kwargs)
+        super().__init__(embed_dims, num_heads, attn_drop, proj_drop,
+                         dropout_layer, init_cfg, batch_first, **kwargs)
 
     def forward(self,
                 query,
