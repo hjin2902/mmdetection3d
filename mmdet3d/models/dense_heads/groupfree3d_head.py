@@ -123,6 +123,8 @@ class GroupFree3DHead(nn.Module):
                  test_cfg=None,
                  num_proposal=128,
                  pred_layer_cfg=None,
+                 size_cls_agnostic=True,
+                 gt_per_seed=3,
                  sampling_objectness_loss=None,
                  objectness_loss=None,
                  center_loss=None,
@@ -130,6 +132,7 @@ class GroupFree3DHead(nn.Module):
                  dir_res_loss=None,
                  size_class_loss=None,
                  size_res_loss=None,
+                 size_reg_loss=None,
                  semantic_loss=None,
                  iou_loss=None):
         super(GroupFree3DHead, self).__init__()
@@ -139,6 +142,8 @@ class GroupFree3DHead(nn.Module):
         self.num_proposal = num_proposal
         self.in_channels = in_channels
         self.num_decoder_layers = num_decoder_layers
+        self.size_cls_agnostic = size_cls_agnostic
+        self.gt_per_seed = gt_per_seed
 
         # Transformer decoder layers
         if isinstance(transformerlayers, ConfigDict):
@@ -213,15 +218,12 @@ class GroupFree3DHead(nn.Module):
         self.center_loss = build_loss(center_loss)
         self.dir_res_loss = build_loss(dir_res_loss)
         self.dir_class_loss = build_loss(dir_class_loss)
-        self.size_res_loss = build_loss(size_res_loss)
-        if size_class_loss is not None:
-            self.size_class_loss = build_loss(size_class_loss)
-        if semantic_loss is not None:
-            self.semantic_loss = build_loss(semantic_loss)
-        if iou_loss is not None:
-            self.iou_loss = build_loss(iou_loss)
+        self.semantic_loss = build_loss(semantic_loss)
+        if self.size_cls_agnostic:
+            self.size_reg_loss = build_loss(size_reg_loss)
         else:
-            self.iou_loss = None
+            self.size_res_loss = build_loss(size_res_loss)
+            self.size_class_loss = build_loss(size_class_loss)
 
     def init_weights(self):
         """Initialize weights of transformer decoder in GroupFree3DHead."""
@@ -303,14 +305,14 @@ class GroupFree3DHead(nn.Module):
         torch.backends.cudnn.deterministic = True
         nn.init.kaiming_normal_(self.conv_pred.conv_reg.weight[23:77])
 
-        print('transformer: ',
-              self.decoder_layers[1].attentions[0].attn.in_proj_weight)
-        print(self.decoder_layers[1].attentions[0].attn.in_proj_weight.shape)
+        # print('transformer: ',
+        #       self.decoder_layers[1].attentions[0].attn.in_proj_weight)
+        # print(self.decoder_layers[1].attentions[0].attn.in_proj_weight.shape)
 
-        print('self_posembed: ',
-              self.decoder_self_posembeds[0].position_embedding_head[0].weight)
-        print(self.decoder_self_posembeds[0].position_embedding_head[0].weight.
-              shape)
+        # print('self_posembed: ',
+        #       self.decoder_self_posembeds[0].position_embedding_head[0].weight)
+        # print(self.decoder_self_posembeds[0].position_embedding_head[0].weight.
+        #       shape)
 
         # print('self.decoder_key_proj: ', self.decoder_key_proj.weight)
         # print(self.decoder_key_proj.weight.shape)
@@ -327,10 +329,13 @@ class GroupFree3DHead(nn.Module):
 
     def _get_reg_out_channels(self):
         """Return the channel number of regression outputs."""
-        # Objectness scores (1), center residual (3),
+        # center residual (3),
         # heading class+residual (num_dir_bins*2),
-        # size class+residual(num_sizes*4)
-        return 3 + self.num_dir_bins * 2 + self.num_sizes * 4
+        # size class+residual(num_sizes*4 or 3)
+        if self.size_cls_agnostic:
+            return 6 + self.num_dir_bins * 2
+        else:
+            return 3 + self.num_dir_bins * 2 + self.num_sizes * 4
 
     def _extract_input(self, feat_dict):
         """Extract inputs from features dictionary.
@@ -522,11 +527,11 @@ class GroupFree3DHead(nn.Module):
         targets = self.get_targets(points, gt_bboxes_3d, gt_labels_3d,
                                    pts_semantic_mask, pts_instance_mask,
                                    bbox_preds)
-        (sampling_targets, sampling_weights, size_class_targets,
-         size_res_targets, dir_class_targets, dir_res_targets, center_targets,
-         assigned_center_targets, mask_targets, valid_gt_masks,
-         objectness_targets, objectness_weights, box_loss_weights,
-         valid_gt_weights) = targets
+        (sampling_targets, sampling_weights, assigned_size_targets,
+         size_class_targets, size_res_targets, dir_class_targets,
+         dir_res_targets, center_targets, assigned_center_targets,
+         mask_targets, valid_gt_masks, objectness_targets, objectness_weights,
+         box_loss_weights, valid_gt_weights) = targets
 
         # print('assigned_center_targets: ', assigned_center_targets)
         # print(assigned_center_targets.shape)
@@ -550,12 +555,15 @@ class GroupFree3DHead(nn.Module):
         print('sampling_objectness_loss: ', sampling_objectness_loss)
 
         objectness_loss_sum = 0.0
+        semantic_loss_sum = 0.0
         center_loss_sum = 0.0
         dir_class_loss_sum = 0.0
         dir_res_loss_sum = 0.0
-        size_class_loss_sum = 0.0
-        size_res_loss_sum = 0.0
-        semantic_loss_sum = 0.0
+        if self.size_cls_agnostic:
+            size_reg_loss_sum = 0.0
+        else:
+            size_class_loss_sum = 0.0
+            size_res_loss_sum = 0.0
 
         suffixes = ['_proposal'] + [
             f'_{i}' for i in range(bbox_preds['num_decoder_layers'])
@@ -630,43 +638,57 @@ class GroupFree3DHead(nn.Module):
 
             # print('dir_res_loss: ', dir_res_loss)
 
-            # calculate size class loss
-            size_class_loss = self.size_class_loss(
-                bbox_preds['size_class' + suffix].transpose(2, 1),
-                size_class_targets,
-                weight=box_loss_weights)
+            if self.size_cls_agnostic:
+                size_reg_loss = self.size_reg_loss(
+                    bbox_preds['size' + suffix],
+                    assigned_size_targets,
+                    weight=box_loss_weights_expand)
 
-            size_class_loss_sum += size_class_loss
-            print(f'size_class_loss{suffix}: ', size_class_loss)
+                size_reg_loss_sum += size_reg_loss
+                # if suffix == '_proposal':
+                #     # print('pred_size: ', bbox_preds['size' + suffix])
+                #     # print(bbox_preds['size' + suffix].shape)
+                #     print('assigned_size_targets: ', assigned_size_targets)
+                #     print(assigned_size_targets.shape)
+                print(f'size_reg_loss{suffix}: ', size_reg_loss)
+            else:
+                # calculate size class loss
+                size_class_loss = self.size_class_loss(
+                    bbox_preds['size_class' + suffix].transpose(2, 1),
+                    size_class_targets,
+                    weight=box_loss_weights)
 
-            # print("size_class_loss: ", size_class_loss)
+                size_class_loss_sum += size_class_loss
 
-            # calculate size residual loss
-            one_hot_size_targets = size_class_targets.new_zeros(
-                (batch_size, proposal_num, self.num_sizes))
-            one_hot_size_targets.scatter_(2, size_class_targets.unsqueeze(-1),
-                                          1)
-            one_hot_size_targets_expand = one_hot_size_targets.unsqueeze(
-                -1).repeat(1, 1, 1, 3).contiguous()
-            size_residual_norm = torch.sum(
-                bbox_preds['size_res_norm' + suffix] *
-                one_hot_size_targets_expand, 2)
-            box_loss_weights_expand = box_loss_weights.unsqueeze(-1).repeat(
-                1, 1, 3)
-            size_res_loss = self.size_res_loss(
-                size_residual_norm,
-                size_res_targets,
-                weight=box_loss_weights_expand)
+                print(f'size_class_loss{suffix}: ', size_class_loss)
 
-            size_res_loss_sum += size_res_loss
+                # calculate size residual loss
+                one_hot_size_targets = size_class_targets.new_zeros(
+                    (batch_size, proposal_num, self.num_sizes))
+                one_hot_size_targets.scatter_(2,
+                                              size_class_targets.unsqueeze(-1),
+                                              1)
+                one_hot_size_targets_expand = one_hot_size_targets.unsqueeze(
+                    -1).repeat(1, 1, 1, 3).contiguous()
+                size_residual_norm = torch.sum(
+                    bbox_preds['size_res_norm' + suffix] *
+                    one_hot_size_targets_expand, 2)
+                box_loss_weights_expand = box_loss_weights.unsqueeze(
+                    -1).repeat(1, 1, 3)
+                size_res_loss = self.size_res_loss(
+                    size_residual_norm,
+                    size_res_targets,
+                    weight=box_loss_weights_expand)
 
-            # print('size_residual_norm: ', size_residual_norm)
-            # print('box_loss_weights_expand: ', box_loss_weights_expand)
-            print(f'size_res_loss{suffix}: ', size_res_loss)
+                size_res_loss_sum += size_res_loss
 
-            # print(size_res_targets)
-            # print(size_res_targets.shape)
-            # print("size_res_loss: ", size_res_loss)
+                # print('size_residual_norm: ', size_residual_norm)
+                # print('box_loss_weights_expand: ', box_loss_weights_expand)
+                print(f'size_res_loss{suffix}: ', size_res_loss)
+
+                # print(size_res_targets)
+                # print(size_res_targets.shape)
+                # print("size_res_loss: ", size_res_loss)
 
             # calculate semantic loss
             semantic_loss = self.semantic_loss(
@@ -682,8 +704,12 @@ class GroupFree3DHead(nn.Module):
 
         print('query_points_generation_loss: ', sampling_objectness_loss / 8)
 
-        sum_heads_box_loss = center_loss_sum + dir_class_loss_sum + \
-            dir_res_loss_sum + size_class_loss_sum + size_res_loss_sum
+        if self.size_cls_agnostic:
+            sum_heads_box_loss = center_loss_sum + dir_class_loss_sum + \
+                dir_res_loss_sum + size_reg_loss_sum
+        else:
+            sum_heads_box_loss = center_loss_sum + dir_class_loss_sum + \
+                dir_res_loss_sum + size_class_loss_sum + size_res_loss_sum
         print('sum_heads_box_loss: ', sum_heads_box_loss)
         print('sum_heads_objectness_loss: ', objectness_loss_sum)
         print('sum_heads_sem_cls_loss: ', semantic_loss_sum)
@@ -697,8 +723,6 @@ class GroupFree3DHead(nn.Module):
         center_loss_sum /= len(suffixes)
         dir_class_loss_sum /= len(suffixes)
         dir_res_loss_sum /= len(suffixes)
-        size_class_loss_sum /= len(suffixes)
-        size_res_loss_sum /= len(suffixes)
 
         losses = dict(
             sampling_objectness_loss=sampling_objectness_loss,
@@ -706,9 +730,16 @@ class GroupFree3DHead(nn.Module):
             semantic_loss=semantic_loss_sum,
             center_loss=center_loss_sum,
             dir_class_loss=dir_class_loss_sum,
-            dir_res_loss=dir_res_loss_sum,
-            size_class_loss=size_class_loss_sum,
-            size_res_loss=size_res_loss_sum)
+            dir_res_loss=dir_res_loss_sum)
+
+        if self.size_cls_agnostic:
+            size_reg_loss_sum /= len(suffixes)
+            losses['size_reg_loss'] = size_reg_loss_sum
+        else:
+            size_class_loss_sum /= len(suffixes)
+            size_res_loss_sum /= len(suffixes)
+            losses['size_class_loss'] = size_class_loss_sum
+            losses['size_res_loss'] = size_res_loss_sum
 
         # if self.iou_loss:
         #     corners_pred = self.bbox_coder.decode_corners(
@@ -768,6 +799,10 @@ class GroupFree3DHead(nn.Module):
 
         max_gt_nums = [max_gt_num for _ in range(len(gt_labels_3d))]
 
+        if pts_semantic_mask is None:
+            pts_semantic_mask = [None for i in range(len(gt_labels_3d))]
+            pts_instance_mask = [None for i in range(len(gt_labels_3d))]
+
         seed_points = [
             bbox_preds['seed_points'][i] for i in range(len(gt_labels_3d))
         ]
@@ -781,8 +816,8 @@ class GroupFree3DHead(nn.Module):
             for i in range(len(gt_labels_3d))
         ]
 
-        (sampling_targets, size_class_targets, size_res_targets,
-         dir_class_targets, dir_res_targets, center_targets,
+        (sampling_targets, assigned_size_targets, size_class_targets,
+         size_res_targets, dir_class_targets, dir_res_targets, center_targets,
          assigned_center_targets, mask_targets, objectness_targets,
          objectness_masks) = multi_apply(self.get_targets_single, points,
                                          gt_bboxes_3d, gt_labels_3d,
@@ -794,8 +829,8 @@ class GroupFree3DHead(nn.Module):
         for index in range(len(gt_labels_3d)):
             # +1: the last one for the empty target ?
             pad_num = max_gt_num - gt_labels_3d[index].shape[0] + 1
-            center_targets[index] = F.pad(center_targets[index],
-                                          (0, 0, 0, pad_num))
+            # center_targets[index] = F.pad(center_targets[index],
+            #                               (0, 0, 0, pad_num))
             valid_gt_masks[index] = F.pad(valid_gt_masks[index], (0, pad_num))
 
         sampling_targets = torch.stack(sampling_targets)
@@ -803,6 +838,7 @@ class GroupFree3DHead(nn.Module):
         sampling_normalizer = sampling_weights.sum(dim=1, keepdim=True).float()
         sampling_weights /= torch.clamp(sampling_normalizer, min=1.0)
 
+        assigned_size_targets = torch.stack(assigned_size_targets)
         center_targets = torch.stack(center_targets)
         valid_gt_masks = torch.stack(valid_gt_masks)
 
@@ -826,11 +862,11 @@ class GroupFree3DHead(nn.Module):
         size_res_targets = torch.stack(size_res_targets)
         mask_targets = torch.stack(mask_targets)
 
-        return (sampling_targets, sampling_weights, size_class_targets,
-                size_res_targets, dir_class_targets, dir_res_targets,
-                center_targets, assigned_center_targets, mask_targets,
-                valid_gt_masks, objectness_targets, objectness_weights,
-                box_loss_weights, valid_gt_weights)
+        return (sampling_targets, sampling_weights, assigned_size_targets,
+                size_class_targets, size_res_targets, dir_class_targets,
+                dir_res_targets, center_targets, assigned_center_targets,
+                mask_targets, valid_gt_masks, objectness_targets,
+                objectness_weights, box_loss_weights, valid_gt_weights)
 
     def get_targets_single(self,
                            points,
@@ -869,32 +905,88 @@ class GroupFree3DHead(nn.Module):
         pts_obj_mask = points.new_zeros([num_points], dtype=torch.long)
         pts_instance_label = points.new_zeros([num_points],
                                               dtype=torch.long) - 1
-        print('pts_instance_mask: ', pts_instance_mask)
-        print(pts_instance_mask.shape)
-        print(pts_instance_mask.sum())
-        print(pts_instance_mask[:50])
-        print('pts_semantic_mask: ', pts_semantic_mask)
-        print(pts_semantic_mask.shape)
-        print(pts_semantic_mask.sum())
-        print(pts_semantic_mask[:50])
-        print('gt_bboxes_3d.gravity_center: ', gt_bboxes_3d.gravity_center)
-        print(gt_bboxes_3d.gravity_center.shape)
-        for i in torch.unique(pts_instance_mask):
-            indices = torch.nonzero(
-                pts_instance_mask == i, as_tuple=False).squeeze(-1)
-
-            if pts_semantic_mask[indices[0]] < self.num_classes:
-                selected_points = points[indices, :3]
-                center = 0.5 * (
-                    selected_points.min(0)[0] + selected_points.max(0)[0])
-
-                delta_xyz = center - gt_bboxes_3d.gravity_center
-                instance_lable = torch.argmin((delta_xyz**2).sum(-1))
-                pts_instance_label[indices] = instance_lable
+        # print('pts_instance_mask: ', pts_instance_mask)
+        # print(pts_instance_mask.shape)
+        # print(pts_instance_mask.sum())
+        # print(pts_instance_mask[:50])
+        # print('pts_semantic_mask: ', pts_semantic_mask)
+        # print(pts_semantic_mask.shape)
+        # print(pts_semantic_mask.sum())
+        # print(pts_semantic_mask[:50])
+        # print('gt_bboxes_3d.gravity_center: ', gt_bboxes_3d.gravity_center)
+        # print(gt_bboxes_3d.gravity_center.shape)
+        if self.bbox_coder.with_rot:
+            vote_targets = points.new_zeros([num_points, 4 * self.gt_per_seed])
+            vote_target_idx = points.new_zeros([num_points], dtype=torch.long)
+            box_indices_all = gt_bboxes_3d.points_in_boxes(points)  # (N, M)
+            for i in range(gt_labels_3d.shape[0]):
+                box_indices = box_indices_all[:, i]  # (N)
+                indices = torch.nonzero(
+                    box_indices, as_tuple=False).squeeze(-1)  # (K)
+                selected_points = points[indices]
                 pts_obj_mask[indices] = 1
+                vote_targets_tmp = vote_targets[indices]  # (K, 12)
+                votes = gt_bboxes_3d.gravity_center[i].unsqueeze(
+                    0) - selected_points[:, :3]  # (K, 3)
+
+                for j in range(self.gt_per_seed):
+                    # (Q) : Q <= K
+                    column_indices = torch.nonzero(
+                        vote_target_idx[indices] == j,
+                        as_tuple=False).squeeze(-1)
+                    vote_targets_tmp[column_indices,
+                                     int(j * 3):int(j * 3 +
+                                                    3)] = votes[column_indices]
+
+                    vote_targets_tmp[column_indices,
+                                     j + 3 * self.gt_per_seed] = i
+                    if j == 0:
+                        vote_targets_tmp[
+                            column_indices, :3 *
+                            self.gt_per_seed] = votes[column_indices].repeat(
+                                1, self.gt_per_seed)
+
+                        vote_targets_tmp[column_indices,
+                                         3 * self.gt_per_seed:] = i
+
+                vote_targets[indices] = vote_targets_tmp
+                vote_target_idx[indices] = torch.clamp(
+                    vote_target_idx[indices] + 1, max=2)
+
+            dist = points.new_zeros([num_points, self.gt_per_seed]) + 1000
+            for j in range(self.gt_per_seed):
+                dist[:, j] = (vote_targets[:, 3 * j:3 * j + 3]**2).sum(-1)
+            instance_indices = torch.argmin(
+                dist, dim=-1).unsqueeze(-1) + 3 * self.gt_per_seed
+            instance_lable = torch.gather(vote_targets, 1,
+                                          instance_indices).squeeze(-1)
+            pts_instance_label = instance_lable.long()
+            pts_instance_label[pts_obj_mask == 0] = -1
+
+        elif pts_semantic_mask is not None:
+            for i in torch.unique(pts_instance_mask):
+                indices = torch.nonzero(
+                    pts_instance_mask == i, as_tuple=False).squeeze(-1)
+
+                if pts_semantic_mask[indices[0]] < self.num_classes:
+                    selected_points = points[indices, :3]
+                    center = 0.5 * (
+                        selected_points.min(0)[0] + selected_points.max(0)[0])
+
+                    delta_xyz = center - gt_bboxes_3d.gravity_center
+                    instance_lable = torch.argmin((delta_xyz**2).sum(-1))
+                    pts_instance_label[indices] = instance_lable
+                    pts_obj_mask[indices] = 1
+        else:
+            raise NotImplementedError
 
         # pts_instance_label = pts_instance_mask
         # pts_obj_mask = pts_semantic_mask
+
+        print('pts_obj_mask: ', pts_obj_mask)
+        print(pts_obj_mask.shape)
+        print(pts_obj_mask.sum())
+        print(pts_obj_mask[:50])
 
         print('pts_instance_label: ', pts_instance_label)
         print(pts_instance_label.shape)
@@ -902,7 +994,7 @@ class GroupFree3DHead(nn.Module):
         print(pts_instance_label[:50])
 
         # generate center, dir, size target
-        (center_targets, size_class_targets, size_res_targets,
+        (center_targets, size_targets, size_class_targets, size_res_targets,
          dir_class_targets,
          dir_res_targets) = self.bbox_coder.encode(gt_bboxes_3d, gt_labels_3d)
 
@@ -913,6 +1005,9 @@ class GroupFree3DHead(nn.Module):
             gt_bboxes_3d.tensor, (0, 0, 0, pad_num), value=1000)
         gt_bboxes_3d = gt_bboxes_3d.new_box(gt_center_pad)
         center_targets = F.pad(center_targets, (0, 0, 0, pad_num))
+        size_targets = F.pad(size_targets, (0, 0, 0, pad_num))
+        print('size_targets: ', size_targets)
+        print(size_targets.shape)
         size_class_targets = F.pad(size_class_targets, (0, pad_num))
         size_res_targets = F.pad(size_res_targets, (0, 0, 0, pad_num))
         dir_class_targets = F.pad(dir_class_targets, (0, pad_num))
@@ -994,6 +1089,7 @@ class GroupFree3DHead(nn.Module):
         #                                        assignment_expand)
 
         # print(assignment_expand)
+        assigned_size_targets = size_targets[assignment]
         dir_class_targets = dir_class_targets[assignment]
         # dir_class_targets = torch.gather(dir_class_targets, 0, assignment)
 
@@ -1032,8 +1128,8 @@ class GroupFree3DHead(nn.Module):
 
         objectness_masks = points.new_ones((num_candidate))
 
-        return (sampling_targets, size_class_targets, size_res_targets,
-                dir_class_targets,
+        return (sampling_targets, assigned_size_targets, size_class_targets,
+                size_res_targets, dir_class_targets,
                 dir_res_targets, center_targets, assigned_center_targets,
                 mask_targets.long(), objectness_targets, objectness_masks)
 

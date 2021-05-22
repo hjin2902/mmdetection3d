@@ -8,12 +8,13 @@ _base_ = [
 model = dict(
     bbox_head=dict(
         num_classes=18,
-        in_channels=288,
+        size_cls_agnostic=False,
         bbox_coder=dict(
             type='GroupFree3DBBoxCoder',
             num_sizes=18,
             num_dir_bins=1,
             with_rot=False,
+            size_cls_agnostic=False,
             mean_sizes=[[0.76966727, 0.8116021, 0.92573744],
                         [1.876858, 1.8425595, 1.1931566],
                         [0.61328, 0.6148609, 0.7182701],
@@ -31,7 +32,34 @@ model = dict(
                         [0.59359556, 0.5912492, 0.73919016],
                         [0.50867593, 0.50656086, 0.30136237],
                         [1.1511526, 1.0546296, 0.49706793],
-                        [0.47535285, 0.49249494, 0.5802117]])))
+                        [0.47535285, 0.49249494, 0.5802117]]),
+        sampling_objectness_loss=dict(
+            type='FocalLoss',
+            use_sigmoid=True,
+            gamma=2.0,
+            alpha=0.25,
+            loss_weight=8.0),
+        objectness_loss=dict(
+            type='FocalLoss',
+            use_sigmoid=True,
+            gamma=2.0,
+            alpha=0.25,
+            loss_weight=1.0),
+        center_loss=dict(
+            type='SmoothL1Loss', beta=0.04, reduction='sum', loss_weight=10.0),
+        dir_class_loss=dict(
+            type='CrossEntropyLoss', reduction='sum', loss_weight=1.0),
+        dir_res_loss=dict(
+            type='SmoothL1Loss', reduction='sum', loss_weight=10.0),
+        size_class_loss=dict(
+            type='CrossEntropyLoss', reduction='sum', loss_weight=1.0),
+        size_res_loss=dict(
+            type='SmoothL1Loss',
+            beta=0.111111111111,
+            reduction='sum',
+            loss_weight=10.0 * 0.111111111111),
+        semantic_loss=dict(
+            type='CrossEntropyLoss', reduction='sum', loss_weight=1.0)))
 
 # dataset settings
 dataset_type = 'ScanNetDataset'

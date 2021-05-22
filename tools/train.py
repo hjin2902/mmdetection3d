@@ -199,8 +199,11 @@ def main():
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
 
+    # state_dict = torch.load(
+    #     '/home/SENSETIME/jinhui/new_scannet_l6o256.pth', map_location='cpu')
     state_dict = torch.load(
-        '/home/SENSETIME/jinhui/new_scannet_l6o256.pth', map_location='cpu')
+        '/home/SENSETIME/jinhui/new_sunrgbd_l6o256_cls_agnostic.pth',
+        map_location='cpu')
     model.load_state_dict(state_dict)
 
     state = {

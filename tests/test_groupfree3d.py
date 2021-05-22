@@ -483,6 +483,213 @@ def load_checkpoint_net(checkpoint_path, model):
     torch.cuda.empty_cache()
 
 
+def load_checkpoint_net_sunrgbd(checkpoint_path, model):
+    # Load checkpoint if there is any
+
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    state_dict = checkpoint['model']
+
+    for k in list(state_dict.keys()):
+        # print(k, '\t', state_dict[k].shape)
+        # state_dict[k[len("module."):]] = state_dict[k]
+        # delete renamed or unused k
+        # del state_dict[k]
+
+        if 'backbone_net' in k:
+            if 'sa' in k:
+                a, b = k.split('.mlp_module')
+                if 'bn' in k:
+                    key = 'backbone.SA_modules.' + str(
+                        (int(a[-1]) - 1)) + '.mlps.0' + b[:7] + b[10:]
+                else:
+                    key = 'backbone.SA_modules.' + str(
+                        (int(a[-1]) - 1)) + '.mlps.0' + b
+            else:
+                a, b = k.split('.mlp')
+                if 'bn' in k:
+                    key = 'backbone.FP_modules.' + str(
+                        (int(a[-1]) - 1)) + '.mlps' + b[:7] + b[10:]
+                else:
+                    key = 'backbone.FP_modules.' + str(
+                        (int(a[-1]) - 1)) + '.mlps' + b
+
+            state_dict[key] = state_dict[k]
+            del state_dict[k]
+            continue
+
+        if 'points_obj_cls' in k:
+            state_dict['bbox_head.' + k[len('module.'):]] = state_dict[k]
+
+        elif 'proposal_head' in k:
+            if '1' in k:
+                a = '0.'
+                b, c = k[len('module.proposal_head.'):].split('1')
+                key = 'bbox_head.conv_pred.shared_convs.layer' + a + b + c
+            elif '2' in k:
+                a = '1.'
+                b, c = k[len('module.proposal_head.'):].split('2')
+                key = 'bbox_head.conv_pred.shared_convs.layer' + a + b + c
+            else:
+                key = 'bbox_head.conv_pred.' + k[len('module.proposal_head.'):]
+            state_dict[key] = state_dict[k]
+
+        elif 'decoder_key_proj' in k:
+            state_dict['bbox_head.' + k[len('module.'):]] = state_dict[k]
+
+        elif 'decoder_query_proj' in k:
+            state_dict['bbox_head.' + k[len('module.'):]] = state_dict[k]
+
+        elif 'decoder_self_posembeds' in k:
+            state_dict['bbox_head.' + k[len('module.'):]] = state_dict[k]
+
+        elif 'decoder_cross_posembeds' in k:
+            state_dict['bbox_head.' + k[len('module.'):]] = state_dict[k]
+
+        elif 'self_attn' in k:
+            a, b = k.split('.self_attn')
+            key = 'bbox_head.decoder_layers.' + a[-1] + '.attentions.0.attn' \
+                + b
+            state_dict[key] = state_dict[k]
+
+        elif 'multihead_attn' in k:
+            a, b = k.split('.multihead_attn')
+            key = 'bbox_head.decoder_layers.' + a[-1] + '.attentions.1.attn' \
+                + b
+            state_dict[key] = state_dict[k]
+
+        elif 'linear' in k:
+            a, b = k.split('.linear')
+            if b[0] == '1':
+                c = '0.0'
+            else:
+                c = '1'
+            key = 'bbox_head.decoder_layers.' + a[
+                -1] + '.ffns.0.layers.' + c + b[1:]
+            state_dict[key] = state_dict[k]
+
+        elif 'norm' in k:
+            a, b = k.split('.norm')
+            c = str(int(b[0]) - 1)
+            key = 'bbox_head.decoder_layers.' + a[-1] + '.norms.' + c + b[1:]
+            state_dict[key] = state_dict[k]
+
+        elif 'prediction_heads' in k:
+            a = k[len('module.prediction_heads.'):]
+            b = a[0:2]
+            c = a[2:]
+            if '1' in c:
+                d, e = c.split('1')
+                key = 'bbox_head.prediction_heads.' + b + \
+                    'shared_convs.layer0.' + d + e
+            elif '2' in c:
+                d, e = c.split('2')
+                key = 'bbox_head.prediction_heads.' + b + \
+                    'shared_convs.layer1.' + d + e
+            else:
+                key = 'bbox_head.prediction_heads.' + a
+
+            state_dict[key] = state_dict[k]
+
+        del state_dict[k]
+
+    obj_weight = state_dict[
+        'bbox_head.conv_pred.objectness_scores_head.weight']
+    cls_weight = state_dict['bbox_head.conv_pred.sem_cls_scores_head.weight']
+    state_dict['bbox_head.conv_pred.conv_cls.weight'] = torch.cat(
+        [obj_weight, cls_weight])
+    del state_dict['bbox_head.conv_pred.objectness_scores_head.weight']
+    del state_dict['bbox_head.conv_pred.sem_cls_scores_head.weight']
+
+    obj_bias = state_dict['bbox_head.conv_pred.objectness_scores_head.bias']
+    cls_bias = state_dict['bbox_head.conv_pred.sem_cls_scores_head.bias']
+    state_dict['bbox_head.conv_pred.conv_cls.bias'] = torch.cat(
+        [obj_bias, cls_bias])
+    del state_dict['bbox_head.conv_pred.objectness_scores_head.bias']
+    del state_dict['bbox_head.conv_pred.sem_cls_scores_head.bias']
+
+    center_weight = state_dict[
+        'bbox_head.conv_pred.center_residual_head.weight']
+    dir_cls_weight = state_dict[
+        'bbox_head.conv_pred.heading_class_head.weight']
+    dir_res_weight = state_dict[
+        'bbox_head.conv_pred.heading_residual_head.weight']
+    # sunrgbd
+    size_pred_weight = state_dict['bbox_head.conv_pred.size_pred_head.weight']
+
+    state_dict['bbox_head.conv_pred.conv_reg.weight'] = torch.cat([
+        center_weight,
+        dir_cls_weight,
+        dir_res_weight,
+        size_pred_weight,
+    ])
+    del state_dict['bbox_head.conv_pred.center_residual_head.weight']
+    del state_dict['bbox_head.conv_pred.heading_class_head.weight']
+    del state_dict['bbox_head.conv_pred.heading_residual_head.weight']
+    del state_dict['bbox_head.conv_pred.size_pred_head.weight']
+
+    center_bias = state_dict['bbox_head.conv_pred.center_residual_head.bias']
+    dir_cls_bias = state_dict['bbox_head.conv_pred.heading_class_head.bias']
+    dir_res_bias = state_dict['bbox_head.conv_pred.heading_residual_head.bias']
+    size_pred_bias = state_dict['bbox_head.conv_pred.size_pred_head.bias']
+
+    state_dict['bbox_head.conv_pred.conv_reg.bias'] = torch.cat(
+        [center_bias, dir_cls_bias, dir_res_bias, size_pred_bias])
+    del state_dict['bbox_head.conv_pred.center_residual_head.bias']
+    del state_dict['bbox_head.conv_pred.heading_class_head.bias']
+    del state_dict['bbox_head.conv_pred.heading_residual_head.bias']
+    del state_dict['bbox_head.conv_pred.size_pred_head.bias']
+
+    for i in range(6):
+        prefix = 'bbox_head.prediction_heads.' + str(i) + '.'
+
+        obj_weight = state_dict[prefix + 'objectness_scores_head.weight']
+        cls_weight = state_dict[prefix + 'sem_cls_scores_head.weight']
+        state_dict[prefix + 'conv_cls.weight'] = torch.cat(
+            [obj_weight, cls_weight])
+        del state_dict[prefix + 'objectness_scores_head.weight']
+        del state_dict[prefix + 'sem_cls_scores_head.weight']
+
+        obj_bias = state_dict[prefix + 'objectness_scores_head.bias']
+        cls_bias = state_dict[prefix + 'sem_cls_scores_head.bias']
+        state_dict[prefix + 'conv_cls.bias'] = torch.cat([obj_bias, cls_bias])
+        del state_dict[prefix + 'objectness_scores_head.bias']
+        del state_dict[prefix + 'sem_cls_scores_head.bias']
+
+        center_weight = state_dict[prefix + 'center_residual_head.weight']
+        dir_cls_weight = state_dict[prefix + 'heading_class_head.weight']
+        dir_res_weight = state_dict[prefix + 'heading_residual_head.weight']
+        size_pred_weight = state_dict[prefix + 'size_pred_head.weight']
+        state_dict[prefix + 'conv_reg.weight'] = torch.cat(
+            [center_weight, dir_cls_weight, dir_res_weight, size_pred_weight])
+        del state_dict[prefix + 'center_residual_head.weight']
+        del state_dict[prefix + 'heading_class_head.weight']
+        del state_dict[prefix + 'heading_residual_head.weight']
+        del state_dict[prefix + 'size_pred_head.weight']
+
+        center_bias = state_dict[prefix + 'center_residual_head.bias']
+        dir_cls_bias = state_dict[prefix + 'heading_class_head.bias']
+        dir_res_bias = state_dict[prefix + 'heading_residual_head.bias']
+        size_pred_bias = state_dict[prefix + 'size_pred_head.bias']
+        state_dict[prefix + 'conv_reg.bias'] = torch.cat(
+            [center_bias, dir_cls_bias, dir_res_bias, size_pred_bias])
+        del state_dict[prefix + 'center_residual_head.bias']
+        del state_dict[prefix + 'heading_class_head.bias']
+        del state_dict[prefix + 'heading_residual_head.bias']
+        del state_dict[prefix + 'size_pred_head.bias']
+
+    model.load_state_dict(state_dict)
+    # print(state_dict)
+
+    torch.save(state_dict,
+               '/home/SENSETIME/jinhui/new_sunrgbd_l6o256_cls_agnostic.pth')
+    print('new_sunrgbd_l6o256_cls_agnostic.pth saved in net successfully!!!')
+
+    print(f'{checkpoint_path} loaded in net successfully!!!')
+
+    del checkpoint
+    torch.cuda.empty_cache()
+
+
 def test_vote_head():
 
     if not torch.cuda.is_available():
@@ -654,7 +861,8 @@ def test_vote_net():
     #     # print(param_tensor)
     #     print(param_tensor,'\t',self.state_dict()[param_tensor].size())
 
-    load_checkpoint_net('tests/scannet_l6o256.pth', self)
+    # load_checkpoint_net('tests/scannet_l6o256.pth', self)
+    load_checkpoint_net_sunrgbd('tests/sunrgbd_l6o256_cls_agnostic.pth', self)
 
     self.cuda()
 
@@ -881,19 +1089,28 @@ def test_getitem():
     print('pts_instance_mask: ', pts_instance_mask)
 
 
-def test_preprocess():
-    xyz = np.fromfile('tests/data/sunrgbd/points/000001.bin', np.float32)
+def load_ckpt():
+    if not torch.cuda.is_available():
+        pytest.skip('test requires GPU and torch+cuda')
 
-    # (B, N, 3)
-    xyz = torch.from_numpy(xyz[..., :3]).view(1, -1, 3).cuda()
-    # (B, C, N)
-    features = xyz.repeat([1, 1, 4]).transpose(1, 2).contiguous().cuda()
+    _setup_seed(0)
+    # vote_net_cfg = _get_detector_cfg(
+    #     'groupfree3d/groupfree3d_8x8_scannet-3d-18class.py')
 
-    print(features.shape)
+    vote_net_cfg = _get_detector_cfg(
+        'groupfree3d/groupfree3d_16x8_sunrgbd-3d-10class.py')
+
+    self = build_detector(vote_net_cfg).cuda()
+
+    # load_checkpoint_net('tests/scannet_l6o256.pth', self)
+    load_checkpoint_net_sunrgbd('tests/sunrgbd_l6o256_cls_agnostic.pth', self)
+
+    print('load ckpt done!!!')
 
 
 if __name__ == '__main__':
     # test_vote_head()
     # test_vote_net()
-    test_getitem()
+    # test_getitem()
+    load_ckpt()
     print('!!!!!!!!!!!!')
