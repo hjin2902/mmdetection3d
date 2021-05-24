@@ -33,8 +33,8 @@ class PointsObjClsModule(nn.Module):
         self.bn2 = torch.nn.BatchNorm1d(self.in_dim)
         self.conv3 = torch.nn.Conv1d(self.in_dim, 1, 1)
         # torch.nn.init.kaiming_normal_(self.conv1.weight, mode='fan_out')
-        print('self.conv1.weight: ', self.conv1.weight)
-        print(self.conv1.weight.shape)
+        # print('self.conv1.weight: ', self.conv1.weight)
+        # print(self.conv1.weight.shape)
 
     def forward(self, seed_features):
         """Forward pass.
@@ -488,6 +488,11 @@ class GroupFree3DHead(nn.Module):
         # print('size_res_norm: ', results['size_res_norm_proposal'])
         # print(results['size_res_norm_proposal'].shape)
         # print(results['size_res_norm_proposal'].sum())
+
+        # print('obj_scores_5: ', results['obj_scores_5'])
+        # print(results['obj_scores_5'].shape)
+
+        print('center_5: ', results['center_5'])
 
         print('query: ', results['query_0'])
         print(results['query_0'].shape)
@@ -1156,11 +1161,9 @@ class GroupFree3DHead(nn.Module):
         suffix = self.test_cfg['suffixes']
 
         # decode boxes
-        obj_scores = F.softmax(
-            bbox_preds['obj_scores' + suffix], dim=-1)[..., -1]
+        obj_scores = F.sigmoid(bbox_preds['obj_scores' + suffix])[..., -1]
         sem_scores = F.softmax(bbox_preds['sem_scores' + suffix], dim=-1)
         bbox3d = self.bbox_coder.decode(bbox_preds, suffix)
-
         if use_nms:
             batch_size = bbox3d.shape[0]
             results = list()
