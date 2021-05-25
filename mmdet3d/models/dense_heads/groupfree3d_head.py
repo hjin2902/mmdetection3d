@@ -492,7 +492,12 @@ class GroupFree3DHead(nn.Module):
         # print('obj_scores_5: ', results['obj_scores_5'])
         # print(results['obj_scores_5'].shape)
 
-        print('center_5: ', results['center_5'])
+        # print('center_5: ', results['center_5'])
+
+        # print('size_5: ', results['size_5'])
+
+        # print('dir_class_5: ', results['dir_class_5'])
+        # print('dir_res_5: ', results['dir_res_5'])
 
         print('query: ', results['query_0'])
         print(results['query_0'].shape)

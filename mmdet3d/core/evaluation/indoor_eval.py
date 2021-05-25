@@ -255,6 +255,20 @@ def indoor_eval(gt_annos,
                 gt_anno['gt_boxes_upright_depth'],
                 box_dim=gt_anno['gt_boxes_upright_depth'].shape[-1],
                 origin=(0.5, 0.5, 0.5)).convert_to(box_mode_3d)
+
+            corner3d = gt_boxes.corners
+            minmax_box3d = corner3d.new(torch.Size((corner3d.shape[0], 6)))
+            minmax_box3d[:, :3] = torch.min(corner3d, dim=1)[0]
+            minmax_box3d[:, 3:] = torch.max(corner3d, dim=1)[0]
+            dims = minmax_box3d[:, 3:] - minmax_box3d[:, :3]
+            boxes = gt_anno['gt_boxes_upright_depth']
+            boxes[:, 3:6] = dims
+
+            gt_boxes = box_type_3d(
+                boxes,
+                box_dim=gt_anno['gt_boxes_upright_depth'].shape[-1],
+                origin=(0.5, 0.5, 0.5)).convert_to(box_mode_3d)
+
             labels_3d = gt_anno['class']
         else:
             gt_boxes = box_type_3d(np.array([], dtype=np.float32))

@@ -44,7 +44,14 @@ class GroupFree3DBBoxCoder(PartialBinBasedBBoxCoder):
         center_target = gt_bboxes_3d.gravity_center
 
         # generate bbox size target
-        size_target = gt_bboxes_3d.dims
+        # size_target = gt_bboxes_3d.dims
+        corner3d = gt_bboxes_3d.corners
+        # print('corners_3d: ', corner3d)
+        minmax_box3d = corner3d.new(torch.Size((corner3d.shape[0], 6)))
+        minmax_box3d[:, :3] = torch.min(corner3d, dim=1)[0]
+        minmax_box3d[:, 3:] = torch.max(corner3d, dim=1)[0]
+        size_target = minmax_box3d[:, 3:] - minmax_box3d[:, :3]
+
         size_class_target = gt_labels_3d
         size_res_target = gt_bboxes_3d.dims - gt_bboxes_3d.tensor.new_tensor(
             self.mean_sizes)[size_class_target]
