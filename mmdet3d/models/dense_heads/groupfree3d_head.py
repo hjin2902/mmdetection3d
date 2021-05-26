@@ -83,7 +83,7 @@ class PositionEmbeddingLearned(nn.Module):
             nn.Conv1d(num_pos_feats, num_pos_feats, kernel_size=1))
 
     def forward(self, xyz):
-        xyz = xyz.transpose(1, 2).contiguous()
+        xyz = xyz.permute(0, 2, 1)
         position_embedding = self.position_embedding_head(xyz)
         return position_embedding
 
@@ -585,8 +585,8 @@ class GroupFree3DHead(nn.Module):
             # print('objectness_loss: ', objectness_loss)
 
             # calculate center loss
-            box_loss_weights_expand = box_loss_weights.unsqueeze(-1).repeat(
-                1, 1, 3)
+            box_loss_weights_expand = box_loss_weights.unsqueeze(-1).expand(
+                -1, -1, 3)
             center_loss = self.center_loss(
                 bbox_preds['center' + suffix],
                 assigned_center_targets,
@@ -647,12 +647,12 @@ class GroupFree3DHead(nn.Module):
             one_hot_size_targets.scatter_(2, size_class_targets.unsqueeze(-1),
                                           1)
             one_hot_size_targets_expand = one_hot_size_targets.unsqueeze(
-                -1).repeat(1, 1, 1, 3).contiguous()
+                -1).expand(-1, -1, -1, 3).contiguous()
             size_residual_norm = torch.sum(
                 bbox_preds['size_res_norm' + suffix] *
                 one_hot_size_targets_expand, 2)
-            box_loss_weights_expand = box_loss_weights.unsqueeze(-1).repeat(
-                1, 1, 3)
+            box_loss_weights_expand = box_loss_weights.unsqueeze(-1).expand(
+                -1, -1, 3)
             size_res_loss = self.size_res_loss(
                 size_residual_norm,
                 size_res_targets,
@@ -989,7 +989,7 @@ class GroupFree3DHead(nn.Module):
         # print(size_res_targets.shape)
 
         assigned_center_targets = center_targets[assignment]
-        assignment_expand = assignment.unsqueeze(1).repeat(1, 3)
+        assignment_expand = assignment.unsqueeze(1).expand(-1, 3)
         # assigned_center_targets = torch.gather(center_targets, 0,
         #                                        assignment_expand)
 
@@ -1017,8 +1017,8 @@ class GroupFree3DHead(nn.Module):
             (num_candidate, self.num_sizes))
 
         one_hot_size_targets.scatter_(1, size_class_targets.unsqueeze(-1), 1)
-        one_hot_size_targets = one_hot_size_targets.unsqueeze(-1).repeat(
-            1, 1, 3)  # (num_candidate,num_size_cluster,3)
+        one_hot_size_targets = one_hot_size_targets.unsqueeze(-1).expand(
+            -1, -1, 3)  # (num_candidate,num_size_cluster,3)
 
         mean_sizes = size_res_targets.new_tensor(
             self.bbox_coder.mean_sizes).unsqueeze(0)
@@ -1060,8 +1060,7 @@ class GroupFree3DHead(nn.Module):
         suffix = self.test_cfg['suffixes']
 
         # decode boxes
-        obj_scores = F.softmax(
-            bbox_preds['obj_scores' + suffix], dim=-1)[..., -1]
+        obj_scores = F.sigmoid(bbox_preds['obj_scores' + suffix])[..., -1]
         sem_scores = F.softmax(bbox_preds['sem_scores' + suffix], dim=-1)
         bbox3d = self.bbox_coder.decode(bbox_preds, suffix)
 
