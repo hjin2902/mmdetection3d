@@ -301,7 +301,19 @@ def load_checkpoint_net(checkpoint_path, model):
             continue
 
         if 'points_obj_cls' in k:
-            state_dict['bbox_head.' + k[len('module.'):]] = state_dict[k]
+            # state_dict['bbox_head.' + k[len('module.'):]] = state_dict[k]
+            if 'conv' in k:
+                a, b = k.split('conv')
+                idx = int(b[0])
+                key = 'bbox_head.points_obj_cls.mlp.layer' + str(
+                    idx - 1) + '.conv' + b[1:]
+            elif 'bn' in k:
+                a, b = k.split('bn')
+                idx = int(b[0])
+                key = 'bbox_head.points_obj_cls.mlp.layer' + str(
+                    idx - 1) + '.bn' + b[1:]
+
+            state_dict[key] = state_dict[k]
 
         elif 'proposal_head' in k:
             if '1' in k:
@@ -474,8 +486,8 @@ def load_checkpoint_net(checkpoint_path, model):
     model.load_state_dict(state_dict)
     # print(state_dict)
 
-    torch.save(state_dict, '/home/SENSETIME/jinhui/new_scannet_l6o256.pth')
-    print('new_scannet_l6o256.pth saved in net successfully!!!')
+    torch.save(state_dict, '/home/SENSETIME/jinhui/newconv_scannet_l6o256.pth')
+    print('newconv_scannet_l6o256.pth saved in net successfully!!!')
 
     print(f'{checkpoint_path} loaded in net successfully!!!')
 
@@ -892,8 +904,27 @@ def test_preprocess():
     print(features.shape)
 
 
+def load_ckpt():
+    if not torch.cuda.is_available():
+        pytest.skip('test requires GPU and torch+cuda')
+
+    _setup_seed(0)
+    # vote_net_cfg = _get_detector_cfg(
+    #     'groupfree3d/groupfree3d_8x8_scannet-3d-18class.py')
+
+    vote_net_cfg = _get_detector_cfg(
+        'groupfree3d/groupfree3d_8x8_scannet-3d-18class.py')
+
+    self = build_detector(vote_net_cfg).cuda()
+
+    load_checkpoint_net('tests/scannet_l6o256.pth', self)
+
+    print('load ckpt done!!!')
+
+
 if __name__ == '__main__':
     # test_vote_head()
     # test_vote_net()
-    test_getitem()
+    # test_getitem()
+    load_ckpt()
     print('!!!!!!!!!!!!')

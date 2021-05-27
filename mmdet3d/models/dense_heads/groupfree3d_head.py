@@ -2,6 +2,7 @@ import copy
 import numpy as np
 import torch
 from mmcv import ConfigDict
+from mmcv.cnn import ConvModule
 from mmcv.cnn.bricks.transformer import build_transformer_layer
 from mmcv.runner import force_fp32
 from torch import nn as nn
@@ -15,40 +16,95 @@ from mmdet.core import build_bbox_coder, multi_apply
 from mmdet.models import HEADS
 from .base_conv_bbox_head import BaseConvBboxHead
 
+# class PointsObjClsModule(nn.Module):
+
+#     def __init__(self, seed_feature_dim):
+#         """object candidate point prediction from seed point features.
+
+#         Args:
+#             seed_feature_dim: int
+#                 number of channels of seed point features
+#         """
+#         super().__init__()
+#         self.in_dim = seed_feature_dim
+#         self.conv1 = torch.nn.Conv1d(self.in_dim, self.in_dim, 1)
+#         self.bn1 = torch.nn.BatchNorm1d(self.in_dim)
+#         self.conv2 = torch.nn.Conv1d(self.in_dim, self.in_dim, 1)
+#         self.bn2 = torch.nn.BatchNorm1d(self.in_dim)
+#         self.conv3 = torch.nn.Conv1d(self.in_dim, 1, 1)
+#         # torch.nn.init.kaiming_normal_(self.conv1.weight, mode='fan_out')
+#         print('self.conv1.weight: ', self.conv1.weight)
+#         print(self.conv1.weight.shape)
+
+#     def forward(self, seed_features):
+#         """Forward pass.
+
+#         Arguments:
+#             seed_features: (batch_size, feature_dim, num_seed) Pytorch tensor
+#         Returns:
+#             logits: (batch_size, 1, num_seed)
+#         """
+#         net = F.relu(self.bn1(self.conv1(seed_features)))
+#         net = F.relu(self.bn2(self.conv2(net)))
+#         logits = self.conv3(net)  # (batch_size, 1, num_seed)
+
+#         return logits
+
 
 class PointsObjClsModule(nn.Module):
+    """object candidate point prediction from seed point features.
 
-    def __init__(self, seed_feature_dim):
-        """object candidate point prediction from seed point features.
+    Args:
+        in_channel (int): number of channels of seed point features.
+        num_conv_layers (int): number of conv layers.
+            Default: 3.
+        conv_cfg (dict): Config of convolution.
+            Default: dict(type='Conv1d').
+        norm_cfg (dict): Config of normalization.
+            Default: dict(type='BN1d').
+        act_cfg (dict): Config of activation.
+            Default: dict(type='ReLU').
+    """
 
-        Args:
-            seed_feature_dim: int
-                number of channels of seed point features
-        """
+    def __init__(self,
+                 in_channel,
+                 num_conv_layers=3,
+                 conv_cfg=dict(type='Conv1d'),
+                 norm_cfg=dict(type='BN1d'),
+                 act_cfg=dict(type='ReLU')):
         super().__init__()
-        self.in_dim = seed_feature_dim
-        self.conv1 = torch.nn.Conv1d(self.in_dim, self.in_dim, 1)
-        self.bn1 = torch.nn.BatchNorm1d(self.in_dim)
-        self.conv2 = torch.nn.Conv1d(self.in_dim, self.in_dim, 1)
-        self.bn2 = torch.nn.BatchNorm1d(self.in_dim)
-        self.conv3 = torch.nn.Conv1d(self.in_dim, 1, 1)
-        # torch.nn.init.kaiming_normal_(self.conv1.weight, mode='fan_out')
-        print('self.conv1.weight: ', self.conv1.weight)
-        print(self.conv1.weight.shape)
+        conv_channels = [in_channel for _ in range(num_conv_layers - 1)]
+        conv_channels.append(1)
+
+        self.mlp = nn.Sequential()
+        prev_channels = in_channel
+        for i in range(num_conv_layers):
+            self.mlp.add_module(
+                f'layer{i}',
+                ConvModule(
+                    prev_channels,
+                    conv_channels[i],
+                    1,
+                    padding=0,
+                    conv_cfg=conv_cfg,
+                    norm_cfg=norm_cfg if i < num_conv_layers - 1 else None,
+                    act_cfg=act_cfg if i < num_conv_layers - 1 else None,
+                    bias=True,
+                    inplace=True))
+            prev_channels = conv_channels[i]
 
     def forward(self, seed_features):
         """Forward pass.
 
-        Arguments:
-            seed_features: (batch_size, feature_dim, num_seed) Pytorch tensor
-        Returns:
-            logits: (batch_size, 1, num_seed)
-        """
-        net = F.relu(self.bn1(self.conv1(seed_features)))
-        net = F.relu(self.bn2(self.conv2(net)))
-        logits = self.conv3(net)  # (batch_size, 1, num_seed)
+        Args:
+            seed_features (torch.Tensor): seed features, dims:
+                (batch_size, feature_dim, num_seed)
 
-        return logits
+        Returns:
+            torch.Tensor: objectness logits, dim:
+                (batch_size, 1, num_seed)
+        """
+        return self.mlp(seed_features)
 
 
 class GeneralSamplingModule(nn.Module):
