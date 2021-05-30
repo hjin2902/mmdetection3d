@@ -597,8 +597,10 @@ class GroupFree3DHead(nn.Module):
             sampling_weights.reshape(-1),
             avg_factor=batch_size)
 
-        # print('sampling_targets: ', sampling_targets)
-        # print(sampling_targets.shape)
+        print('sampling_obj_score: ', sampling_obj_score)
+        print(sampling_obj_score.shape)
+        print('sampling_targets: ', sampling_targets)
+        print(sampling_targets.shape)
         # print(sampling_targets.sum())
         # print('sampling_weights: ', sampling_weights)
         # print(sampling_weights.shape)
